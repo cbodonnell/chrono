@@ -1,0 +1,26 @@
+server:
+  addr: ":8080"
+
+storage:
+  data_dir: "./data"
+
+entities:
+  sensor:
+    indexes:
+      - name: temp
+        type: float
+      - name: active
+        type: bool
+      - name: location
+        type: string
+      - name: tags
+        type: string_array
+
+  order:
+    indexes:
+      - name: user_id
+        type: string
+      - name: amount
+        type: float
+      - name: status
+        type: string
