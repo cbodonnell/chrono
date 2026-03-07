@@ -327,7 +327,7 @@ es := store.NewEntityStore(
     badgerstore.NewKVStore(db),
     badgerstore.NewIndexStore(db),
     registry,
-    store.NewJSONSerializer(),
+    store.NewMsgpackSerializer(),
 )
 defer es.Close()
 

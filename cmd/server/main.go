@@ -52,7 +52,7 @@ func main() {
 	idx := badgerstore.NewIndexStore(db)
 
 	// Create entity store
-	es := store.NewEntityStore(kv, idx, registry, store.NewJSONSerializer())
+	es := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
 	defer es.Close()
 
 	// Create and start server

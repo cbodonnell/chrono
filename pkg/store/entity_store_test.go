@@ -24,7 +24,7 @@ func setupTestStore() *store.EntityStore {
 		},
 	})
 
-	return store.NewEntityStore(kv, idx, registry, store.NewJSONSerializer())
+	return store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
 }
 
 func TestWriteAndGet(t *testing.T) {
