@@ -35,6 +35,8 @@ func main() {
 	// Clean up any existing data
 	os.RemoveAll("./data")
 
+	// TODO: create a convienience function so we don't need to expose badger
+	// to the consumer. Something like store.NewEmbeddedStore(...)
 	// Initialize BadgerDB
 	opts := badger.DefaultOptions("./data/apm")
 	opts.Logger = nil
