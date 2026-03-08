@@ -55,6 +55,12 @@ func main() {
 	es := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
 	defer es.Close()
 
+	// TODO: should this happen in NewEntityStore (maybe conditionally)
+	// Sync indexes (checks for config changes and reindexes if needed)
+	if err := es.SyncIndexes(); err != nil {
+		log.Fatalf("failed to sync indexes: %v", err)
+	}
+
 	// Create and start server
 	srv := server.New(es, server.Config{
 		Addr:     cfg.Server.Addr,

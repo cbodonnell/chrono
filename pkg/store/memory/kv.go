@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/cbodonnell/chrono/pkg/store"
@@ -53,6 +55,31 @@ func (s *KVStore) Delete(key string) error {
 	defer s.mu.Unlock()
 
 	delete(s.data, key)
+	return nil
+}
+
+// ScanPrefix iterates over all keys with the given prefix in sorted order.
+func (s *KVStore) ScanPrefix(prefix string, fn func(key string, value []byte) bool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Collect and sort matching keys
+	var keys []string
+	for k := range s.data {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	// Iterate in sorted order
+	for _, k := range keys {
+		val := make([]byte, len(s.data[k]))
+		copy(val, s.data[k])
+		if !fn(k, val) {
+			break
+		}
+	}
 	return nil
 }
 

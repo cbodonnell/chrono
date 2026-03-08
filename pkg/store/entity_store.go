@@ -1,7 +1,10 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"sort"
 
 	"github.com/cbodonnell/chrono/pkg/entity"
 	"github.com/cbodonnell/chrono/pkg/index"
@@ -134,6 +137,134 @@ func (s *EntityStore) deleteIndexes(e *entity.Entity) error {
 				return fmt.Errorf("index delete %s: %w", idxField.Name, err)
 			}
 		}
+	}
+
+	return nil
+}
+
+const configHashKeyPrefix = "_meta:index_config:"
+
+// SyncIndexes checks index configurations and rebuilds indexes if configurations have changed.
+// This should be called after creating the EntityStore and before using it.
+// Returns an error if reindexing fails.
+func (s *EntityStore) SyncIndexes() error {
+	for _, entityType := range s.registry.EntityTypes() {
+		cfg := s.registry.Get(entityType)
+		if cfg == nil {
+			continue
+		}
+
+		currentHash := s.hashConfig(cfg)
+		storedHash, err := s.getStoredConfigHash(entityType)
+		if err != nil && err != ErrNotFound {
+			return fmt.Errorf("get stored config hash for %s: %w", entityType, err)
+		}
+
+		if currentHash != storedHash {
+			if err := s.Reindex(entityType); err != nil {
+				return fmt.Errorf("reindex %s: %w", entityType, err)
+			}
+			if err := s.storeConfigHash(entityType, currentHash); err != nil {
+				return fmt.Errorf("store config hash for %s: %w", entityType, err)
+			}
+		}
+	}
+	return nil
+}
+
+// hashConfig computes a deterministic hash of an EntityTypeConfig.
+func (s *EntityStore) hashConfig(cfg *index.EntityTypeConfig) string {
+	h := sha256.New()
+
+	// Sort indexes by name for deterministic ordering
+	indexes := make([]index.FieldIndex, len(cfg.Indexes))
+	copy(indexes, cfg.Indexes)
+	sort.Slice(indexes, func(i, j int) bool {
+		return indexes[i].Name < indexes[j].Name
+	})
+
+	for _, idx := range indexes {
+		h.Write([]byte(idx.Name))
+		h.Write([]byte{byte(idx.Type)})
+	}
+
+	h.Write([]byte(cfg.TTL.String()))
+
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// getStoredConfigHash retrieves the stored config hash for an entity type.
+func (s *EntityStore) getStoredConfigHash(entityType string) (string, error) {
+	key := configHashKeyPrefix + entityType
+	val, err := s.kv.Get(key)
+	if err != nil {
+		return "", err
+	}
+	return string(val), nil
+}
+
+// storeConfigHash stores the config hash for an entity type.
+func (s *EntityStore) storeConfigHash(entityType string, hash string) error {
+	key := configHashKeyPrefix + entityType
+	return s.kv.Set(key, []byte(hash))
+}
+
+// Reindex rebuilds all indexes for a given entity type.
+// This clears existing indexes and re-indexes all entities from the KV store.
+func (s *EntityStore) Reindex(entityType string) error {
+	// 1. Delete all existing indexes for this entity type
+	prefix := []byte(entityType + "/")
+	var keysToDelete [][]byte
+	if err := s.indexStore.ScanPrefix(prefix, func(key []byte) bool {
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		keysToDelete = append(keysToDelete, keyCopy)
+		return true
+	}); err != nil {
+		return fmt.Errorf("scan indexes for deletion: %w", err)
+	}
+
+	for _, key := range keysToDelete {
+		if err := s.indexStore.Delete(key); err != nil {
+			return fmt.Errorf("delete index key: %w", err)
+		}
+	}
+
+	// 2. Scan KV store for all entities of this type and re-index them
+	kvPrefix := entityType + ":"
+	if err := s.kv.ScanPrefix(kvPrefix, func(key string, value []byte) bool {
+		var e entity.Entity
+		if err := s.serializer.Unmarshal(value, &e); err != nil {
+			return true // Skip malformed entities
+		}
+
+		// Write the _all index entry
+		allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
+		if err := s.indexStore.Set(allKey, nil); err != nil {
+			return true // Continue on error
+		}
+
+		// Write field indexes based on current config
+		cfg := s.registry.Get(e.Type)
+		if cfg == nil {
+			return true
+		}
+
+		for _, idxField := range cfg.Indexes {
+			val, ok := idxField.Path.Extract(e.Fields)
+			if !ok {
+				continue
+			}
+
+			keys := index.BuildIndexKeys(e.Type, idxField.Name, val, e.Timestamp, e.ID)
+			for _, k := range keys {
+				s.indexStore.Set(k, nil)
+			}
+		}
+
+		return true
+	}); err != nil {
+		return fmt.Errorf("scan entities for reindex: %w", err)
 	}
 
 	return nil

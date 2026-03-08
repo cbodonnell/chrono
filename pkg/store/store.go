@@ -18,6 +18,10 @@ type KVStore interface {
 	// Delete removes a key.
 	Delete(key string) error
 
+	// ScanPrefix iterates over all keys with the given prefix.
+	// The callback receives each key and value; return false to stop iteration.
+	ScanPrefix(prefix string, fn func(key string, value []byte) bool) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }

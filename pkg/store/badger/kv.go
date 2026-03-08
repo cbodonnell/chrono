@@ -46,6 +46,30 @@ func (s *KVStore) Delete(key string) error {
 	})
 }
 
+// ScanPrefix iterates over all keys with the given prefix.
+func (s *KVStore) ScanPrefix(prefix string, fn func(key string, value []byte) bool) error {
+	prefixBytes := []byte(prefix)
+	return s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = prefixBytes
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+			item := it.Item()
+			key := string(item.Key())
+			val, err := item.ValueCopy(nil)
+			if err != nil {
+				return err
+			}
+			if !fn(key, val) {
+				break
+			}
+		}
+		return nil
+	})
+}
+
 // Close is a no-op since the DB lifecycle is managed externally.
 func (s *KVStore) Close() error {
 	return nil

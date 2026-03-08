@@ -90,3 +90,14 @@ func (r *Registry) Has(entityType string) bool {
 	_, ok := r.configs[entityType]
 	return ok
 }
+
+// EntityTypes returns a list of all registered entity types.
+func (r *Registry) EntityTypes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	types := make([]string, 0, len(r.configs))
+	for t := range r.configs {
+		types = append(types, t)
+	}
+	return types
+}
