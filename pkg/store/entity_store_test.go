@@ -501,6 +501,90 @@ func TestCompoundQuery(t *testing.T) {
 	}
 }
 
+func TestWriteUpdatesIndexes(t *testing.T) {
+	s := setupTestStore()
+	defer s.Close()
+
+	now := time.Now().UnixNano()
+
+	// Write initial entity with active=true
+	e := &entity.Entity{
+		ID:        "sensor-001",
+		Type:      "sensor",
+		Timestamp: now,
+		Fields: map[string]entity.Value{
+			"temp":   entity.NewFloat(72.5),
+			"active": entity.NewBool(true),
+		},
+	}
+
+	if err := s.Write(e); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Verify it can be queried by active=true
+	results, err := s.Query(&store.Query{
+		EntityType: "sensor",
+		Filters: []store.FieldFilter{
+			{Field: "active", Op: store.OpEq, Value: entity.NewBool(true)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for active=true, got %d", len(results))
+	}
+
+	// Update the entity with active=false (and new timestamp)
+	e.Timestamp = now + 1000
+	e.Fields["active"] = entity.NewBool(false)
+
+	if err := s.Write(e); err != nil {
+		t.Fatalf("Write update failed: %v", err)
+	}
+
+	// Old index should be gone - query by active=true should return 0
+	results, err = s.Query(&store.Query{
+		EntityType: "sensor",
+		Filters: []store.FieldFilter{
+			{Field: "active", Op: store.OpEq, Value: entity.NewBool(true)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results for active=true after update, got %d", len(results))
+	}
+
+	// New index should exist - query by active=false should return 1
+	results, err = s.Query(&store.Query{
+		EntityType: "sensor",
+		Filters: []store.FieldFilter{
+			{Field: "active", Op: store.OpEq, Value: entity.NewBool(false)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for active=false after update, got %d", len(results))
+	}
+
+	// Verify Get returns the updated entity
+	got, err := s.Get("sensor", "sensor-001")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got.Fields["active"].B != false {
+		t.Errorf("Expected active=false, got %v", got.Fields["active"].B)
+	}
+	if got.Timestamp != now+1000 {
+		t.Errorf("Expected updated timestamp, got %d", got.Timestamp)
+	}
+}
+
 func TestDelete(t *testing.T) {
 	s := setupTestStore()
 	defer s.Close()

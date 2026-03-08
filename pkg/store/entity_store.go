@@ -29,30 +29,43 @@ func NewEntityStore(kv KVStore, indexStore IndexStore, registry *index.Registry,
 
 // Write stores an entity and updates all configured indexes.
 func (s *EntityStore) Write(e *entity.Entity) error {
-	// 1. Serialize full entity → KV
+	kvKey := fmt.Sprintf("%s:%s", e.Type, e.ID)
+
+	// 1. Check if entity already exists and delete old indexes
+	if existing, err := s.kv.Get(kvKey); err == nil {
+		var oldEntity entity.Entity
+		if err := s.serializer.Unmarshal(existing, &oldEntity); err != nil {
+			return fmt.Errorf("deserialize old entity: %w", err)
+		}
+		if err := s.deleteIndexes(&oldEntity); err != nil {
+			return fmt.Errorf("delete old indexes: %w", err)
+		}
+	} else if err != ErrNotFound {
+		return fmt.Errorf("kv get: %w", err)
+	}
+
+	// 2. Serialize full entity → KV
 	blob, err := s.serializer.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("serialize entity: %w", err)
 	}
-
-	kvKey := fmt.Sprintf("%s:%s", e.Type, e.ID)
 	if err := s.kv.Set(kvKey, blob); err != nil {
 		return fmt.Errorf("kv set: %w", err)
 	}
 
-	// 2. Write the _all index entry for time-series queries
+	// 3. Write the _all index entry for time-series queries
 	allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
 	if err := s.indexStore.Set(allKey, nil); err != nil {
 		return fmt.Errorf("index set _all: %w", err)
 	}
 
-	// 3. Look up index config for this entity type
+	// 4. Look up index config for this entity type
 	cfg := s.registry.Get(e.Type)
 	if cfg == nil {
 		return nil // No indexes configured, just store in KV
 	}
 
-	// 4. Write one index entry per indexed field
+	// 5. Write one index entry per indexed field
 	for _, idxField := range cfg.Indexes {
 		val, ok := idxField.Path.Extract(e.Fields)
 		if !ok {
@@ -88,19 +101,22 @@ func (s *EntityStore) Get(entityType, entityID string) (*entity.Entity, error) {
 
 // Delete removes an entity and all its index entries.
 func (s *EntityStore) Delete(e *entity.Entity) error {
-	// 1. Delete from KV store
 	kvKey := fmt.Sprintf("%s:%s", e.Type, e.ID)
 	if err := s.kv.Delete(kvKey); err != nil && err != ErrNotFound {
 		return fmt.Errorf("kv delete: %w", err)
 	}
+	return s.deleteIndexes(e)
+}
 
-	// 2. Delete the _all index entry
+// deleteIndexes removes all index entries for an entity.
+func (s *EntityStore) deleteIndexes(e *entity.Entity) error {
+	// Delete the _all index entry
 	allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
 	if err := s.indexStore.Delete(allKey); err != nil {
 		return fmt.Errorf("index delete _all: %w", err)
 	}
 
-	// 3. Delete field index entries
+	// Delete field index entries
 	cfg := s.registry.Get(e.Type)
 	if cfg == nil {
 		return nil
