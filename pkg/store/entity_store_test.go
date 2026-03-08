@@ -7,12 +7,11 @@ import (
 	"github.com/cbodonnell/chrono/pkg/entity"
 	"github.com/cbodonnell/chrono/pkg/index"
 	"github.com/cbodonnell/chrono/pkg/store"
-	"github.com/cbodonnell/chrono/pkg/store/memory"
 )
 
 func setupTestStore() *store.EntityStore {
-	kv := memory.NewKVStore()
-	idx := memory.NewIndexStore()
+	kv := store.NewMemoryKVStore()
+	idx := store.NewMemoryIndexStore()
 	registry := index.NewRegistry()
 
 	// Configure sensor entity type
@@ -36,8 +35,8 @@ func mustParsePath(s string) entity.Path {
 }
 
 func setupNestedTestStore() *store.EntityStore {
-	kv := memory.NewKVStore()
-	idx := memory.NewIndexStore()
+	kv := store.NewMemoryKVStore()
+	idx := store.NewMemoryIndexStore()
 	registry := index.NewRegistry()
 
 	// Configure device entity type with nested indexes

@@ -12,7 +12,6 @@ import (
 	"github.com/cbodonnell/chrono/internal/config"
 	"github.com/cbodonnell/chrono/internal/server"
 	"github.com/cbodonnell/chrono/pkg/store"
-	badgerstore "github.com/cbodonnell/chrono/pkg/store/badger"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -48,8 +47,8 @@ func main() {
 	defer db.Close()
 
 	// Create storage backends
-	kv := badgerstore.NewKVStore(db)
-	idx := badgerstore.NewIndexStore(db)
+	kv := store.NewBadgerKVStore(db)
+	idx := store.NewBadgerIndexStore(db)
 
 	// Create entity store
 	es := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())

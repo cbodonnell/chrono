@@ -1,4 +1,4 @@
-package memory
+package store
 
 import (
 	"bytes"
@@ -6,21 +6,23 @@ import (
 	"sync"
 )
 
-// IndexStore is an in-memory implementation of store.IndexStore using a sorted slice.
-type IndexStore struct {
+// MemoryIndexStore is an in-memory implementation of store.IndexStore using a sorted slice.
+type MemoryIndexStore struct {
 	mu   sync.RWMutex
 	keys [][]byte
 }
 
-// NewIndexStore creates a new in-memory index store.
-func NewIndexStore() *IndexStore {
-	return &IndexStore{
+var _ IndexStore = (*MemoryIndexStore)(nil)
+
+// NewMemoryIndexStore creates a new in-memory index store.
+func NewMemoryIndexStore() *MemoryIndexStore {
+	return &MemoryIndexStore{
 		keys: make([][]byte, 0),
 	}
 }
 
 // Set stores an index entry.
-func (s *IndexStore) Set(key []byte, value []byte) error {
+func (s *MemoryIndexStore) Set(key []byte, value []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -46,7 +48,7 @@ func (s *IndexStore) Set(key []byte, value []byte) error {
 }
 
 // Delete removes an index entry.
-func (s *IndexStore) Delete(key []byte) error {
+func (s *MemoryIndexStore) Delete(key []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -62,7 +64,7 @@ func (s *IndexStore) Delete(key []byte) error {
 }
 
 // Scan iterates over keys in the range [start, end) in lexicographic order.
-func (s *IndexStore) Scan(start, end []byte, fn func(key []byte) bool) error {
+func (s *MemoryIndexStore) Scan(start, end []byte, fn func(key []byte) bool) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -84,7 +86,7 @@ func (s *IndexStore) Scan(start, end []byte, fn func(key []byte) bool) error {
 }
 
 // ScanPrefix iterates over all keys with the given prefix.
-func (s *IndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
+func (s *MemoryIndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -106,6 +108,6 @@ func (s *IndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
 }
 
 // Close releases resources.
-func (s *IndexStore) Close() error {
+func (s *MemoryIndexStore) Close() error {
 	return nil
 }

@@ -1,4 +1,4 @@
-package badger
+package store
 
 import (
 	"bytes"
@@ -6,32 +6,34 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
-// IndexStore is a BadgerDB implementation of store.IndexStore.
-type IndexStore struct {
+// BadgerIndexStore is a BadgerDB implementation of store.IndexStore.
+type BadgerIndexStore struct {
 	db *badger.DB
 }
 
-// NewIndexStore creates a new BadgerDB-backed index store.
-func NewIndexStore(db *badger.DB) *IndexStore {
-	return &IndexStore{db: db}
+var _ IndexStore = (*BadgerIndexStore)(nil)
+
+// NewBadgerIndexStore creates a new BadgerDB-backed index store.
+func NewBadgerIndexStore(db *badger.DB) *BadgerIndexStore {
+	return &BadgerIndexStore{db: db}
 }
 
 // Set stores an index entry.
-func (s *IndexStore) Set(key []byte, value []byte) error {
+func (s *BadgerIndexStore) Set(key []byte, value []byte) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(key, value)
 	})
 }
 
 // Delete removes an index entry.
-func (s *IndexStore) Delete(key []byte) error {
+func (s *BadgerIndexStore) Delete(key []byte) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(key)
 	})
 }
 
 // Scan iterates over keys in the range [start, end) in lexicographic order.
-func (s *IndexStore) Scan(start, end []byte, fn func(key []byte) bool) error {
+func (s *BadgerIndexStore) Scan(start, end []byte, fn func(key []byte) bool) error {
 	return s.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
@@ -52,7 +54,7 @@ func (s *IndexStore) Scan(start, end []byte, fn func(key []byte) bool) error {
 }
 
 // ScanPrefix iterates over all keys with the given prefix.
-func (s *IndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
+func (s *BadgerIndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
 	return s.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
@@ -70,6 +72,6 @@ func (s *IndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
 }
 
 // Close is a no-op since the DB lifecycle is managed externally.
-func (s *IndexStore) Close() error {
+func (s *BadgerIndexStore) Close() error {
 	return nil
 }
