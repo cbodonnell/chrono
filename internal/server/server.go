@@ -260,6 +260,16 @@ func toValue(v interface{}) (entity.Value, error) {
 			arr[i] = elemVal
 		}
 		return entity.NewArray(arr), nil
+	case map[string]interface{}:
+		obj := make(map[string]entity.Value, len(val))
+		for k, v := range val {
+			vv, err := toValue(v)
+			if err != nil {
+				return entity.Value{}, err
+			}
+			obj[k] = vv
+		}
+		return entity.NewObject(obj), nil
 	case nil:
 		return entity.Value{}, errors.New("null values not supported")
 	default:
@@ -306,6 +316,12 @@ func fromValue(v entity.Value) interface{} {
 			arr[i] = fromValue(elem)
 		}
 		return arr
+	case entity.KindObject:
+		obj := make(map[string]interface{}, len(v.Obj))
+		for k, elem := range v.Obj {
+			obj[k] = fromValue(elem)
+		}
+		return obj
 	default:
 		return nil
 	}

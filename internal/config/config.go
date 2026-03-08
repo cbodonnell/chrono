@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cbodonnell/chrono/pkg/entity"
 	"github.com/cbodonnell/chrono/pkg/index"
 	"gopkg.in/yaml.v3"
 )
@@ -70,9 +71,14 @@ func (c *Config) BuildRegistry() (*index.Registry, error) {
 			if err != nil {
 				return nil, fmt.Errorf("entity %q index %q: %w", entityType, idx.Name, err)
 			}
+			path, err := entity.ParsePath(idx.Name)
+			if err != nil {
+				return nil, fmt.Errorf("entity %q invalid field path %q: %w", entityType, idx.Name, err)
+			}
 			indexes[i] = index.FieldIndex{
 				Name: idx.Name,
 				Type: fieldType,
+				Path: path,
 			}
 		}
 		registry.Register(entityType, &index.EntityTypeConfig{

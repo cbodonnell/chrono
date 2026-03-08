@@ -1,6 +1,6 @@
 # Chrono
 
-A schema-free entity database with configurable field-level indexes, efficient time-series range queries, and O(1) entity retrieval.
+A lightweight schema-free entity database with configurable field-level indexes, efficient time-series range queries, and O(1) entity retrieval.
 
 ## Features
 
@@ -43,7 +43,7 @@ entities:
         type: float
       - name: active
         type: bool
-      - name: location
+      - name: metadata.location
         type: string
       - name: tags
         type: string_array
@@ -66,7 +66,10 @@ curl -X POST http://localhost:8080/entities \
     "fields": {
       "temp": 72.5,
       "active": true,
-      "location": "floor-1",
+      "metadata": {
+        "location": "floor-1",
+        "owner": "team-a"
+      },
       "tags": ["production", "critical"]
     }
   }'
@@ -80,7 +83,7 @@ curl -X POST http://localhost:8080/query \
   -d '{
     "entity_type": "sensor",
     "filters": [
-      {"field": "active", "op": "eq", "value": true}
+      {"field": "metadata.location", "op": "eq", "value": "floor-1"}
     ]
   }'
 ```
@@ -128,6 +131,17 @@ entities:
 | `int_array` / `[]int` | Array of integers |
 | `float_array` / `[]float` | Array of floats |
 
+### Nested Field Paths
+
+Index names support dot-notation for nested objects and bracket notation for arrays:
+
+| Path | Description |
+|------|-------------|
+| `field` | Top-level field |
+| `field.child` | Nested object field |
+| `field[0]` | Array element |
+| `field[0].child` | Array element's nested field |
+
 ## HTTP API
 
 ### Create/Update Entity
@@ -144,6 +158,10 @@ POST /entities
   "fields": {
     "temp": 72.5,
     "active": true,
+    "metadata": {
+      "location": "floor-1",
+      "owner": "team-a"
+    },
     "tags": ["production"]
   }
 }
@@ -177,6 +195,7 @@ POST /query
   "entity_type": "sensor",
   "filters": [
     {"field": "active", "op": "eq", "value": true},
+    {"field": "metadata.location", "op": "eq", "value": "floor-1"},
     {"field": "tags", "op": "contains", "value": "production"}
   ],
   "time_range": {
@@ -199,12 +218,6 @@ POST /query
 | `contains` | | Array contains element |
 
 Multiple filters use AND semantics.
-
-### Health Check
-
-```
-GET /health
-```
 
 ## Architecture
 

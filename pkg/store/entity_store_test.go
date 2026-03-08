@@ -18,13 +18,216 @@ func setupTestStore() *store.EntityStore {
 	// Configure sensor entity type
 	registry.Register("sensor", &index.EntityTypeConfig{
 		Indexes: []index.FieldIndex{
-			{Name: "temp", Type: index.FieldTypeFloat},
-			{Name: "active", Type: index.FieldTypeBool},
-			{Name: "tags", Type: index.FieldTypeStringArray},
+			{Name: "temp", Type: index.FieldTypeFloat, Path: mustParsePath("temp")},
+			{Name: "active", Type: index.FieldTypeBool, Path: mustParsePath("active")},
+			{Name: "tags", Type: index.FieldTypeStringArray, Path: mustParsePath("tags")},
 		},
 	})
 
 	return store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
+}
+
+func mustParsePath(s string) entity.Path {
+	path, err := entity.ParsePath(s)
+	if err != nil {
+		panic(err)
+	}
+	return path
+}
+
+func setupNestedTestStore() *store.EntityStore {
+	kv := memory.NewKVStore()
+	idx := memory.NewIndexStore()
+	registry := index.NewRegistry()
+
+	// Configure device entity type with nested indexes
+	registry.Register("device", &index.EntityTypeConfig{
+		Indexes: []index.FieldIndex{
+			{Name: "status", Type: index.FieldTypeString, Path: mustParsePath("status")},
+			{Name: "metadata.location", Type: index.FieldTypeString, Path: mustParsePath("metadata.location")},
+			{Name: "readings[0].value", Type: index.FieldTypeFloat, Path: mustParsePath("readings[0].value")},
+		},
+	})
+
+	return store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
+}
+
+func TestNestedFieldIndex(t *testing.T) {
+	s := setupNestedTestStore()
+	defer s.Close()
+
+	now := time.Now().UnixNano()
+
+	// Create device with nested fields
+	device := &entity.Entity{
+		ID:        "device-001",
+		Type:      "device",
+		Timestamp: now,
+		Fields: map[string]entity.Value{
+			"status": entity.NewString("active"),
+			"metadata": entity.NewObject(map[string]entity.Value{
+				"location": entity.NewString("building-a"),
+				"owner":    entity.NewString("team-x"),
+			}),
+			"readings": entity.NewArray([]entity.Value{
+				entity.NewObject(map[string]entity.Value{
+					"value": entity.NewFloat(72.5),
+					"unit":  entity.NewString("F"),
+				}),
+				entity.NewObject(map[string]entity.Value{
+					"value": entity.NewFloat(23.1),
+					"unit":  entity.NewString("C"),
+				}),
+			}),
+		},
+	}
+
+	if err := s.Write(device); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Query by nested object field
+	results, err := s.Query(&store.Query{
+		EntityType: "device",
+		Filters: []store.FieldFilter{
+			{Field: "metadata.location", Op: store.OpEq, Value: entity.NewString("building-a")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for metadata.location, got %d", len(results))
+	}
+	if len(results) > 0 && results[0].ID != "device-001" {
+		t.Errorf("Expected device-001, got %s", results[0].ID)
+	}
+}
+
+func TestNestedArrayFieldIndex(t *testing.T) {
+	s := setupNestedTestStore()
+	defer s.Close()
+
+	now := time.Now().UnixNano()
+
+	// Create multiple devices with different readings
+	devices := []*entity.Entity{
+		{
+			ID:        "device-001",
+			Type:      "device",
+			Timestamp: now,
+			Fields: map[string]entity.Value{
+				"status": entity.NewString("active"),
+				"readings": entity.NewArray([]entity.Value{
+					entity.NewObject(map[string]entity.Value{
+						"value": entity.NewFloat(72.5),
+					}),
+				}),
+			},
+		},
+		{
+			ID:        "device-002",
+			Type:      "device",
+			Timestamp: now + 1000,
+			Fields: map[string]entity.Value{
+				"status": entity.NewString("active"),
+				"readings": entity.NewArray([]entity.Value{
+					entity.NewObject(map[string]entity.Value{
+						"value": entity.NewFloat(68.0),
+					}),
+				}),
+			},
+		},
+		{
+			ID:        "device-003",
+			Type:      "device",
+			Timestamp: now + 2000,
+			Fields: map[string]entity.Value{
+				"status": entity.NewString("inactive"),
+				"readings": entity.NewArray([]entity.Value{
+					entity.NewObject(map[string]entity.Value{
+						"value": entity.NewFloat(72.5),
+					}),
+				}),
+			},
+		},
+	}
+
+	for _, d := range devices {
+		if err := s.Write(d); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+	}
+
+	// Query by array element's nested field
+	results, err := s.Query(&store.Query{
+		EntityType: "device",
+		Filters: []store.FieldFilter{
+			{Field: "readings[0].value", Op: store.OpEq, Value: entity.NewFloat(72.5)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results for readings[0].value=72.5, got %d", len(results))
+	}
+}
+
+func TestDeleteNestedFieldIndex(t *testing.T) {
+	s := setupNestedTestStore()
+	defer s.Close()
+
+	device := &entity.Entity{
+		ID:        "device-001",
+		Type:      "device",
+		Timestamp: time.Now().UnixNano(),
+		Fields: map[string]entity.Value{
+			"status": entity.NewString("active"),
+			"metadata": entity.NewObject(map[string]entity.Value{
+				"location": entity.NewString("building-a"),
+			}),
+		},
+	}
+
+	if err := s.Write(device); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Verify entity can be queried
+	results, err := s.Query(&store.Query{
+		EntityType: "device",
+		Filters: []store.FieldFilter{
+			{Field: "metadata.location", Op: store.OpEq, Value: entity.NewString("building-a")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 result before delete, got %d", len(results))
+	}
+
+	// Delete the entity
+	if err := s.Delete(device); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Verify entity is gone
+	results, err = s.Query(&store.Query{
+		EntityType: "device",
+		Filters: []store.FieldFilter{
+			{Field: "metadata.location", Op: store.OpEq, Value: entity.NewString("building-a")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results after delete, got %d", len(results))
+	}
 }
 
 func TestWriteAndGet(t *testing.T) {

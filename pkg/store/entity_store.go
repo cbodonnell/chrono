@@ -54,7 +54,7 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 
 	// 4. Write one index entry per indexed field
 	for _, idxField := range cfg.Indexes {
-		val, ok := e.Fields[idxField.Name]
+		val, ok := idxField.Path.Extract(e.Fields)
 		if !ok {
 			continue
 		}
@@ -107,7 +107,7 @@ func (s *EntityStore) Delete(e *entity.Entity) error {
 	}
 
 	for _, idxField := range cfg.Indexes {
-		val, ok := e.Fields[idxField.Name]
+		val, ok := idxField.Path.Extract(e.Fields)
 		if !ok {
 			continue
 		}

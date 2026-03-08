@@ -17,16 +17,18 @@ const (
 	KindBool
 	KindString
 	KindArray
+	KindObject
 )
 
-// Value is a discriminated union covering all supported primitive types + arrays.
+// Value is a discriminated union covering all supported primitive types + arrays + objects.
 type Value struct {
-	Kind ValueKind `msgpack:"k"`
-	I    int64     `msgpack:"i,omitempty"`
-	F    float64   `msgpack:"f,omitempty"`
-	B    bool      `msgpack:"b,omitempty"`
-	S    string    `msgpack:"s,omitempty"`
-	Arr  []Value   `msgpack:"a,omitempty"`
+	Kind ValueKind        `msgpack:"k"`
+	I    int64            `msgpack:"i,omitempty"`
+	F    float64          `msgpack:"f,omitempty"`
+	B    bool             `msgpack:"b,omitempty"`
+	S    string           `msgpack:"s,omitempty"`
+	Arr  []Value          `msgpack:"a,omitempty"`
+	Obj  map[string]Value `msgpack:"o,omitempty"`
 }
 
 // NewInt creates an int64 Value.
@@ -61,4 +63,9 @@ func NewStringArray(strs []string) Value {
 		arr[i] = NewString(s)
 	}
 	return Value{Kind: KindArray, Arr: arr}
+}
+
+// NewObject creates an object Value from a map of Values.
+func NewObject(obj map[string]Value) Value {
+	return Value{Kind: KindObject, Obj: obj}
 }

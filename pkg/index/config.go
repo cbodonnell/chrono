@@ -44,8 +44,9 @@ func (ft FieldType) ElementKind() entity.ValueKind {
 
 // FieldIndex defines an index on a single field.
 type FieldIndex struct {
-	Name string
+	Name string        // Original path string (e.g., "user.address.city")
 	Type FieldType
+	Path entity.Path   // Parsed path segments (computed once at registration)
 }
 
 // EntityTypeConfig holds the index configuration for an entity type.

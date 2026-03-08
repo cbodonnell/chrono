@@ -11,16 +11,7 @@ entities:
         type: float
       - name: active
         type: bool
-      - name: location
+      - name: metadata.location
         type: string
       - name: tags
         type: string_array
-
-  order:
-    indexes:
-      - name: user_id
-        type: string
-      - name: amount
-        type: float
-      - name: status
-        type: string
