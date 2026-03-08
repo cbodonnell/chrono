@@ -1,0 +1,21 @@
+server:
+  addr: ":8080"
+
+storage:
+  data_dir: "./data/apm"
+
+entities:
+  http_request:
+    indexes:
+      - name: service
+        type: string
+      - name: endpoint
+        type: string
+      - name: method
+        type: string
+      - name: status_code
+        type: int
+      - name: latency_ms
+        type: int
+      - name: tags
+        type: string_array
