@@ -270,6 +270,46 @@ func (s *EntityStore) Reindex(entityType string) error {
 	return nil
 }
 
+// DeleteExpiredBatch deletes up to limit expired entities (timestamps before cutoffNS).
+// Returns the number of entities deleted.
+func (s *EntityStore) DeleteExpiredBatch(entityType string, cutoffNS int64, limit int) (int, error) {
+	// Build range for _all index: from beginning of time to cutoff
+	startKey := s.keyBuilder.BuildAllRangeStart(entityType, 0)
+	endKey := s.keyBuilder.BuildAllRangeEnd(entityType, cutoffNS)
+
+	// Collect entity IDs to delete (up to limit)
+	var entityIDs []string
+	err := s.indexStore.Scan(startKey, endKey, func(key []byte) bool {
+		_, _, entityID := index.ParseAllIndexKey(key)
+		if entityID != "" {
+			entityIDs = append(entityIDs, entityID)
+		}
+		return len(entityIDs) < limit
+	})
+	if err != nil {
+		return 0, fmt.Errorf("scan expired entities: %w", err)
+	}
+
+	// Delete each entity (this handles KV + all index cleanup)
+	deleted := 0
+	for _, entityID := range entityIDs {
+		e, err := s.Get(entityType, entityID)
+		if err != nil {
+			if err == ErrNotFound {
+				continue // Already deleted
+			}
+			return deleted, fmt.Errorf("get entity %s/%s: %w", entityType, entityID, err)
+		}
+
+		if err := s.Delete(e); err != nil {
+			return deleted, fmt.Errorf("delete entity %s/%s: %w", entityType, entityID, err)
+		}
+		deleted++
+	}
+
+	return deleted, nil
+}
+
 // Close releases resources held by the store.
 func (s *EntityStore) Close() error {
 	if err := s.kv.Close(); err != nil {

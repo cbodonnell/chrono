@@ -61,6 +61,14 @@ func main() {
 		log.Fatalf("failed to sync indexes: %v", err)
 	}
 
+	// Start retention worker if any entity has TTL configured
+	var retentionWorker *store.RetentionWorker
+	if store.HasRetention(registry) {
+		retentionWorker = store.NewRetentionWorker(es, registry, store.DefaultRetentionConfig())
+		retentionWorker.Start()
+		log.Println("retention worker started")
+	}
+
 	// Create and start server
 	srv := server.New(es, server.Config{
 		Addr:     cfg.Server.Addr,
@@ -83,6 +91,13 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Stop retention worker first (if running)
+	if retentionWorker != nil {
+		if err := retentionWorker.Stop(ctx); err != nil {
+			log.Printf("retention worker shutdown error: %v", err)
+		}
+	}
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown error: %v", err)

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cbodonnell/chrono/pkg/entity"
 	"github.com/cbodonnell/chrono/pkg/index"
@@ -28,7 +29,8 @@ type StorageConfig struct {
 
 // EntityConfig defines an entity type and its indexes.
 type EntityConfig struct {
-	Indexes []IndexConfig `yaml:"indexes"`
+	Retention string        `yaml:"retention"` // e.g., "168h", "720h" - empty means keep forever
+	Indexes   []IndexConfig `yaml:"indexes"`
 }
 
 // IndexConfig defines a single field index.
@@ -81,8 +83,19 @@ func (c *Config) BuildRegistry() (*index.Registry, error) {
 				Path: path,
 			}
 		}
+
+		var ttl time.Duration
+		if entityCfg.Retention != "" {
+			var err error
+			ttl, err = time.ParseDuration(entityCfg.Retention)
+			if err != nil {
+				return nil, fmt.Errorf("entity %q invalid retention %q: %w", entityType, entityCfg.Retention, err)
+			}
+		}
+
 		registry.Register(entityType, &index.EntityTypeConfig{
 			Indexes: indexes,
+			TTL:     ttl,
 		})
 	}
 
