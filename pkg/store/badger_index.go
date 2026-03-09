@@ -71,7 +71,10 @@ func (s *BadgerIndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) e
 	})
 }
 
-// Close is a no-op since the DB lifecycle is managed externally.
+// Close closes the badger db connection if it's not already closed.
 func (s *BadgerIndexStore) Close() error {
-	return nil
+	if s.db.IsClosed() {
+		return nil
+	}
+	return s.db.Close()
 }

@@ -7,16 +7,19 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/cbodonnell/chrono/pkg/config"
 	"github.com/cbodonnell/chrono/pkg/entity"
-	"github.com/cbodonnell/chrono/pkg/index"
 	"github.com/cbodonnell/chrono/pkg/store"
-	"github.com/dgraph-io/badger/v4"
 )
 
 const entityType = "http_request"
@@ -32,42 +35,31 @@ var endpoints = map[string][]string{
 var methods = []string{"GET", "POST", "PUT", "DELETE"}
 
 func main() {
-	// Clean up any existing data
-	os.RemoveAll("./data")
+	// Create a context that cancels on SIGINT or SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// TODO: create a convienience function so we don't need to expose badger
-	// to the consumer. Something like store.NewEmbeddedStore(...)
-	// Initialize BadgerDB
-	opts := badger.DefaultOptions("./data/apm")
-	opts.Logger = nil
-	db, err := badger.Open(opts)
-	if err != nil {
-		log.Fatalf("failed to open database: %v", err)
+	var (
+		configFile = flag.String("config", "", "Path to config file (required)")
+	)
+	flag.Parse()
+
+	if *configFile == "" {
+		log.Fatal("config file is required: use -config flag")
 	}
-	defer db.Close()
 
-	// Create index registry with APM schema
-	registry := index.NewRegistry()
-	registry.Register(entityType, &index.EntityTypeConfig{
-		Indexes: []index.FieldIndex{
-			{Name: "service", Type: index.FieldTypeString, Path: mustParsePath("service")},
-			{Name: "endpoint", Type: index.FieldTypeString, Path: mustParsePath("endpoint")},
-			{Name: "method", Type: index.FieldTypeString, Path: mustParsePath("method")},
-			{Name: "status_code", Type: index.FieldTypeInt, Path: mustParsePath("status_code")},
-			{Name: "latency_ms", Type: index.FieldTypeInt, Path: mustParsePath("latency_ms")},
-			{Name: "tags", Type: index.FieldTypeStringArray, Path: mustParsePath("tags")},
-		},
-	})
+	// Load configuration
+	cfg, err := config.Load(*configFile)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
 
 	// Create entity store
-	kv := store.NewBadgerKVStore(db)
-	idx := store.NewBadgerIndexStore(db)
-	es := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
-	defer es.Close()
-
-	if err := es.SyncIndexes(); err != nil {
-		log.Fatalf("failed to sync indexes: %v", err)
+	es, err := store.NewEmbeddedStore(cfg)
+	if err != nil {
+		log.Fatalf("failed to create entity store : %v", err)
 	}
+	defer es.Close(ctx)
 
 	fmt.Println("=== Chrono APM Example ===")
 	fmt.Println()
@@ -362,12 +354,4 @@ func extractTags(v entity.Value) []string {
 		tags[i] = t.S
 	}
 	return tags
-}
-
-func mustParsePath(s string) entity.Path {
-	p, err := entity.ParsePath(s)
-	if err != nil {
-		panic(err)
-	}
-	return p
 }

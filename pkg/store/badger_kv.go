@@ -71,7 +71,10 @@ func (s *BadgerKVStore) ScanPrefix(prefix string, fn func(key string, value []by
 	})
 }
 
-// Close is a no-op since the DB lifecycle is managed externally.
+// Close closes the badger db connection if it's not already closed.
 func (s *BadgerKVStore) Close() error {
-	return nil
+	if s.db.IsClosed() {
+		return nil
+	}
+	return s.db.Close()
 }

@@ -44,9 +44,9 @@ func (ft FieldType) ElementKind() entity.ValueKind {
 
 // FieldIndex defines an index on a single field.
 type FieldIndex struct {
-	Name string        // Original path string (e.g., "user.address.city")
+	Name string // Original path string (e.g., "user.address.city")
 	Type FieldType
-	Path entity.Path   // Parsed path segments (computed once at registration)
+	Path entity.Path // Parsed path segments (computed once at registration)
 }
 
 // EntityTypeConfig holds the index configuration for an entity type.
@@ -100,4 +100,15 @@ func (r *Registry) EntityTypes() []string {
 		types = append(types, t)
 	}
 	return types
+}
+
+// HasRetention returns true if any entity has retention configured
+func (r *Registry) HasRetention() bool {
+	for _, entityType := range r.EntityTypes() {
+		cfg := r.Get(entityType)
+		if cfg != nil && cfg.TTL > 0 {
+			return true
+		}
+	}
+	return false
 }

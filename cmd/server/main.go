@@ -9,13 +9,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cbodonnell/chrono/internal/config"
 	"github.com/cbodonnell/chrono/internal/server"
+	"github.com/cbodonnell/chrono/pkg/config"
 	"github.com/cbodonnell/chrono/pkg/store"
-	"github.com/dgraph-io/badger/v4"
 )
 
 func main() {
+	// Create a context that cancels on SIGINT or SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var (
 		configFile = flag.String("config", "", "Path to config file (required)")
 	)
@@ -31,52 +34,17 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// Build index registry from config
-	registry, err := cfg.BuildRegistry()
-	if err != nil {
-		log.Fatalf("failed to build registry: %v", err)
-	}
-
-	// Open BadgerDB
-	opts := badger.DefaultOptions(cfg.Storage.DataDir)
-	opts.Logger = nil // Disable badger's verbose logging
-	db, err := badger.Open(opts)
-	if err != nil {
-		log.Fatalf("failed to open database: %v", err)
-	}
-	defer db.Close()
-
-	// Create storage backends
-	kv := store.NewBadgerKVStore(db)
-	idx := store.NewBadgerIndexStore(db)
-
 	// Create entity store
-	es := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
-	defer es.Close()
-
-	// TODO: should this happen in NewEntityStore (maybe conditionally)
-	// Sync indexes (checks for config changes and reindexes if needed)
-	if err := es.SyncIndexes(); err != nil {
-		log.Fatalf("failed to sync indexes: %v", err)
+	es, err := store.NewEmbeddedStore(cfg)
+	if err != nil {
+		log.Fatalf("failed to create entity store : %v", err)
 	}
-
-	// Start retention worker if any entity has TTL configured
-	var retentionWorker *store.RetentionWorker
-	if store.HasRetention(registry) {
-		retentionWorker = store.NewRetentionWorker(es, registry, store.DefaultRetentionConfig())
-		retentionWorker.Start()
-		log.Println("retention worker started")
-	}
+	defer es.Close(ctx)
 
 	// Create and start server
 	srv := server.New(es, server.Config{
-		Addr:     cfg.Server.Addr,
-		Registry: registry,
+		Addr: cfg.Server.Addr,
 	})
-
-	// Handle graceful shutdown
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		log.Printf("chrono server listening on %s", cfg.Server.Addr)
@@ -85,18 +53,11 @@ func main() {
 		}
 	}()
 
-	<-done
+	<-ctx.Done()
 	log.Println("shutting down...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// Stop retention worker first (if running)
-	if retentionWorker != nil {
-		if err := retentionWorker.Stop(ctx); err != nil {
-			log.Printf("retention worker shutdown error: %v", err)
-		}
-	}
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown error: %v", err)

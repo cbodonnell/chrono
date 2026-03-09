@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -12,22 +13,38 @@ import (
 
 // EntityStore is the main entry point for entity storage and retrieval.
 type EntityStore struct {
-	kv         KVStore
-	indexStore IndexStore
-	registry   *index.Registry
-	serializer Serializer
-	keyBuilder *index.KeyBuilder
+	kv              KVStore
+	indexStore      IndexStore
+	registry        *index.Registry
+	serializer      Serializer
+	keyBuilder      *index.KeyBuilder
+	retentionWorker *RetentionWorker
 }
 
 // NewEntityStore creates a new EntityStore.
-func NewEntityStore(kv KVStore, indexStore IndexStore, registry *index.Registry, serializer Serializer) *EntityStore {
-	return &EntityStore{
+func NewEntityStore(kv KVStore, indexStore IndexStore, registry *index.Registry, serializer Serializer) (*EntityStore, error) {
+	es := &EntityStore{
 		kv:         kv,
 		indexStore: indexStore,
 		registry:   registry,
 		serializer: serializer,
 		keyBuilder: index.NewKeyBuilder(),
 	}
+
+	// TODO: figure out if this should happen here or not.
+	// It's convenient, but potentially unexpected for an index rebuild to occur.
+	// Sync indexes (checks for config changes and reindexes if needed)
+	if err := es.syncIndexes(); err != nil {
+		return nil, fmt.Errorf("failed to sync indexes: %v", err)
+	}
+
+	// Start retention worker if any entity has TTL configured
+	if registry.HasRetention() {
+		es.retentionWorker = NewRetentionWorker(es, registry, DefaultRetentionConfig())
+		es.retentionWorker.Start()
+	}
+
+	return es, nil
 }
 
 // Write stores an entity and updates all configured indexes.
@@ -144,10 +161,10 @@ func (s *EntityStore) deleteIndexes(e *entity.Entity) error {
 
 const configHashKeyPrefix = "_meta:index_config:"
 
-// SyncIndexes checks index configurations and rebuilds indexes if configurations have changed.
+// syncIndexes checks index configurations and rebuilds indexes if configurations have changed.
 // This should be called after creating the EntityStore and before using it.
 // Returns an error if reindexing fails.
-func (s *EntityStore) SyncIndexes() error {
+func (s *EntityStore) syncIndexes() error {
 	for _, entityType := range s.registry.EntityTypes() {
 		cfg := s.registry.Get(entityType)
 		if cfg == nil {
@@ -311,9 +328,19 @@ func (s *EntityStore) DeleteExpiredBatch(entityType string, cutoffNS int64, limi
 }
 
 // Close releases resources held by the store.
-func (s *EntityStore) Close() error {
+func (s *EntityStore) Close(ctx context.Context) error {
+	if s.retentionWorker != nil {
+		if err := s.retentionWorker.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	if err := s.kv.Close(); err != nil {
 		return err
 	}
-	return s.indexStore.Close()
+	if err := s.indexStore.Close(); err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -132,14 +132,3 @@ func (w *RetentionWorker) cleanupEntityType(entityType string, ttl time.Duration
 		log.Printf("retention: deleted %d expired entities of type %s", totalDeleted, entityType)
 	}
 }
-
-// HasRetention returns true if any entity type has TTL configured.
-func HasRetention(registry *index.Registry) bool {
-	for _, entityType := range registry.EntityTypes() {
-		cfg := registry.Get(entityType)
-		if cfg != nil && cfg.TTL > 0 {
-			return true
-		}
-	}
-	return false
-}

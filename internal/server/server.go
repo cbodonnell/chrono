@@ -10,14 +10,12 @@ import (
 	"time"
 
 	"github.com/cbodonnell/chrono/pkg/entity"
-	"github.com/cbodonnell/chrono/pkg/index"
 	"github.com/cbodonnell/chrono/pkg/store"
 )
 
 // Config holds server configuration.
 type Config struct {
-	Addr     string
-	Registry *index.Registry
+	Addr string
 }
 
 // Server is an embeddable HTTP server for chrono.

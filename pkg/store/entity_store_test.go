@@ -9,7 +9,7 @@ import (
 	"github.com/cbodonnell/chrono/pkg/store"
 )
 
-func setupTestStore() *store.EntityStore {
+func setupTestStore(t *testing.T) *store.EntityStore {
 	kv := store.NewMemoryKVStore()
 	idx := store.NewMemoryIndexStore()
 	registry := index.NewRegistry()
@@ -23,7 +23,12 @@ func setupTestStore() *store.EntityStore {
 		},
 	})
 
-	return store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
+	es, err := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
+	if err != nil {
+		t.Errorf("failed to create entity store: %v", err)
+	}
+
+	return es
 }
 
 func mustParsePath(s string) entity.Path {
@@ -34,7 +39,7 @@ func mustParsePath(s string) entity.Path {
 	return path
 }
 
-func setupNestedTestStore() *store.EntityStore {
+func setupNestedTestStore(t *testing.T) *store.EntityStore {
 	kv := store.NewMemoryKVStore()
 	idx := store.NewMemoryIndexStore()
 	registry := index.NewRegistry()
@@ -48,12 +53,17 @@ func setupNestedTestStore() *store.EntityStore {
 		},
 	})
 
-	return store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
+	es, err := store.NewEntityStore(kv, idx, registry, store.NewMsgpackSerializer())
+	if err != nil {
+		t.Errorf("failed to create entity store: %v", err)
+	}
+
+	return es
 }
 
 func TestNestedFieldIndex(t *testing.T) {
-	s := setupNestedTestStore()
-	defer s.Close()
+	s := setupNestedTestStore(t)
+	defer s.Close(t.Context())
 
 	now := time.Now().UnixNano()
 
@@ -105,8 +115,8 @@ func TestNestedFieldIndex(t *testing.T) {
 }
 
 func TestNestedArrayFieldIndex(t *testing.T) {
-	s := setupNestedTestStore()
-	defer s.Close()
+	s := setupNestedTestStore(t)
+	defer s.Close(t.Context())
 
 	now := time.Now().UnixNano()
 
@@ -176,8 +186,8 @@ func TestNestedArrayFieldIndex(t *testing.T) {
 }
 
 func TestDeleteNestedFieldIndex(t *testing.T) {
-	s := setupNestedTestStore()
-	defer s.Close()
+	s := setupNestedTestStore(t)
+	defer s.Close(t.Context())
 
 	device := &entity.Entity{
 		ID:        "device-001",
@@ -230,8 +240,8 @@ func TestDeleteNestedFieldIndex(t *testing.T) {
 }
 
 func TestWriteAndGet(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	e := &entity.Entity{
 		ID:        "sensor-001",
@@ -265,8 +275,8 @@ func TestWriteAndGet(t *testing.T) {
 }
 
 func TestQueryByField(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	now := time.Now().UnixNano()
 
@@ -324,8 +334,8 @@ func TestQueryByField(t *testing.T) {
 }
 
 func TestQueryByArrayContains(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	now := time.Now().UnixNano()
 
@@ -379,8 +389,8 @@ func TestQueryByArrayContains(t *testing.T) {
 }
 
 func TestQueryTimeRange(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()
 
@@ -435,8 +445,8 @@ func TestQueryTimeRange(t *testing.T) {
 }
 
 func TestCompoundQuery(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	now := time.Now().UnixNano()
 
@@ -501,8 +511,8 @@ func TestCompoundQuery(t *testing.T) {
 }
 
 func TestWriteUpdatesIndexes(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	now := time.Now().UnixNano()
 
@@ -585,8 +595,8 @@ func TestWriteUpdatesIndexes(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	s := setupTestStore()
-	defer s.Close()
+	s := setupTestStore(t)
+	defer s.Close(t.Context())
 
 	e := &entity.Entity{
 		ID:        "sensor-001",
