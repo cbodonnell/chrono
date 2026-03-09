@@ -26,6 +26,7 @@ type Query struct {
 	Filters    []FieldFilter // AND semantics
 	TimeRange  *TimeRange
 	Limit      int
+	Reverse    bool // If true, return results in reverse chronological order (newest first)
 }
 
 // FieldFilter specifies a filter on a single field.
@@ -48,6 +49,7 @@ type entityKey struct {
 }
 
 // Query executes a query and returns matching entities.
+// TODO: figure out multi-tenancy within the database
 func (s *EntityStore) Query(q *Query) ([]*entity.Entity, error) {
 	// If no filters, use the _all index for time-series query
 	if len(q.Filters) == 0 {
@@ -79,7 +81,7 @@ func (s *EntityStore) Query(q *Query) ([]*entity.Entity, error) {
 	}
 
 	// Fetch entities from KV store
-	return s.fetchEntities(q.EntityType, result, q.Limit)
+	return s.fetchEntities(q.EntityType, result, q.Limit, q.Reverse)
 }
 
 // queryAll queries using the _all index for time-series access.
@@ -97,16 +99,23 @@ func (s *EntityStore) queryAll(q *Query) ([]*entity.Entity, error) {
 		end = kb.BuildAllRangeEnd(q.EntityType, math.MaxInt64)
 	}
 
-	err := s.indexStore.Scan(start, end, func(key []byte) bool {
+	scanFn := func(key []byte) bool {
 		_, ts, id := index.ParseAllIndexKey(key)
 		keys[entityKey{Timestamp: ts, ID: id}] = struct{}{}
 		return true
-	})
+	}
+
+	var err error
+	if q.Reverse {
+		err = s.indexStore.ReverseScan(start, end, scanFn)
+	} else {
+		err = s.indexStore.Scan(start, end, scanFn)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	return s.fetchEntities(q.EntityType, keys, q.Limit)
+	return s.fetchEntities(q.EntityType, keys, q.Limit, q.Reverse)
 }
 
 // scanFilter scans the index for a single filter.
@@ -274,15 +283,21 @@ func intersect(a, b map[entityKey]struct{}) map[entityKey]struct{} {
 }
 
 // fetchEntities fetches entities from KV store and returns them sorted by timestamp.
-func (s *EntityStore) fetchEntities(entityType string, keys map[entityKey]struct{}, limit int) ([]*entity.Entity, error) {
+func (s *EntityStore) fetchEntities(entityType string, keys map[entityKey]struct{}, limit int, reverse bool) ([]*entity.Entity, error) {
 	// Sort by timestamp
 	sorted := make([]entityKey, 0, len(keys))
 	for key := range keys {
 		sorted = append(sorted, key)
 	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Timestamp < sorted[j].Timestamp
-	})
+	if reverse {
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].Timestamp > sorted[j].Timestamp
+		})
+	} else {
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].Timestamp < sorted[j].Timestamp
+		})
+	}
 
 	// Apply limit
 	if limit > 0 && len(sorted) > limit {

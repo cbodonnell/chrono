@@ -43,6 +43,10 @@ type IndexStore interface {
 	// The callback receives each key; return false to stop iteration.
 	ScanPrefix(prefix []byte, fn func(key []byte) bool) error
 
+	// ReverseScan iterates over keys in the range [start, end) in reverse lexicographic order.
+	// The callback receives each key; return false to stop iteration.
+	ReverseScan(start, end []byte, fn func(key []byte) bool) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }

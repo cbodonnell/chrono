@@ -85,6 +85,28 @@ func (s *MemoryIndexStore) Scan(start, end []byte, fn func(key []byte) bool) err
 	return nil
 }
 
+// ReverseScan iterates over keys in the range [start, end) in reverse lexicographic order.
+func (s *MemoryIndexStore) ReverseScan(start, end []byte, fn func(key []byte) bool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Find the position just before end (exclusive upper bound)
+	endIdx := sort.Search(len(s.keys), func(i int) bool {
+		return bytes.Compare(s.keys[i], end) >= 0
+	}) - 1
+
+	for i := endIdx; i >= 0; i-- {
+		if bytes.Compare(s.keys[i], start) < 0 {
+			break
+		}
+		if !fn(s.keys[i]) {
+			break
+		}
+	}
+
+	return nil
+}
+
 // ScanPrefix iterates over all keys with the given prefix.
 func (s *MemoryIndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) error {
 	s.mu.RLock()
