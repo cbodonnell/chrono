@@ -560,20 +560,20 @@ func TestWriteCreatesNewVersions(t *testing.T) {
 		t.Fatalf("Write new version failed: %v", err)
 	}
 
-	// Both versions exist - query with IncludeHistory finds both
+	// Both versions exist - query with AllVersions finds both
 	resultsHistory, err := s.Query(&store.Query{
-		EntityType:     "sensor",
-		IncludeHistory: true,
+		EntityType:  "sensor",
+		AllVersions: true,
 	})
 	if err != nil {
-		t.Fatalf("Query with history failed: %v", err)
+		t.Fatalf("Query with all versions failed: %v", err)
 	}
 	if len(resultsHistory) != 2 {
 		t.Errorf("Expected 2 versions in history, got %d", len(resultsHistory))
 	}
 
-	// Query by active=true finds the old version, but returns latest version of entity
-	// (deduplication returns latest version per entity ID)
+	// Query by active=true should return 0 results because latest version has active=false
+	// (default behavior only returns entities whose LATEST version matches the filter)
 	results, err = s.Query(&store.Query{
 		EntityType: "sensor",
 		Filters: []store.FieldFilter{
@@ -583,12 +583,26 @@ func TestWriteCreatesNewVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("Expected 1 result when querying active=true, got %d", len(results))
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results when querying active=true (latest version is active=false), got %d", len(results))
 	}
-	// The result is the latest version (active=false) because we deduplicate by ID
-	if len(results) > 0 && results[0].Fields["active"].B != false {
-		t.Errorf("Expected latest version with active=false, got active=%v", results[0].Fields["active"].B)
+
+	// Query with AllVersions should find the old version with active=true
+	resultsAllVersions, err := s.Query(&store.Query{
+		EntityType:  "sensor",
+		AllVersions: true,
+		Filters: []store.FieldFilter{
+			{Field: "active", Op: store.OpEq, Value: entity.NewBool(true)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query with all versions failed: %v", err)
+	}
+	if len(resultsAllVersions) != 1 {
+		t.Errorf("Expected 1 result for active=true with AllVersions, got %d", len(resultsAllVersions))
+	}
+	if len(resultsAllVersions) > 0 && resultsAllVersions[0].Fields["active"].B != true {
+		t.Errorf("Expected version with active=true, got active=%v", resultsAllVersions[0].Fields["active"].B)
 	}
 
 	// Query by active=false should return 1 (latest version matches)

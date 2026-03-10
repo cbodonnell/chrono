@@ -175,9 +175,8 @@ func (s *Server) deleteEntity(w http.ResponseWriter, entityType, entityID string
 
 // HistoryResponse is the paginated response for entity history.
 type HistoryResponse struct {
-	Items      []EntityResponse `json:"items"`
-	NextCursor string           `json:"next_cursor,omitempty"`
-	HasMore    bool             `json:"has_more"`
+	Items []EntityResponse `json:"items"`
+	Next  string           `json:"next,omitempty"`
 }
 
 // getEntityHistory handles GET /entities/{type}/{id}/history.
@@ -259,9 +258,11 @@ func (s *Server) getEntityHistory(w http.ResponseWriter, r *http.Request, entity
 	}
 
 	// Determine if there are more results
-	hasMore := len(history) > requestedLimit
-	if hasMore {
+	var next string
+	if len(history) > requestedLimit {
 		history = history[:requestedLimit]
+		lastItem := history[len(history)-1]
+		next = strconv.FormatInt(lastItem.Timestamp, 10)
 	}
 
 	items := make([]EntityResponse, len(history))
@@ -269,17 +270,9 @@ func (s *Server) getEntityHistory(w http.ResponseWriter, r *http.Request, entity
 		items[i] = EntityResponse{}.FromEntity(e)
 	}
 
-	// Build next cursor from the last item's timestamp
-	var nextCursor string
-	if hasMore && len(history) > 0 {
-		lastItem := history[len(history)-1]
-		nextCursor = strconv.FormatInt(lastItem.Timestamp, 10)
-	}
-
 	resp := HistoryResponse{
-		Items:      items,
-		NextCursor: nextCursor,
-		HasMore:    hasMore,
+		Items: items,
+		Next:  next,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -451,12 +444,13 @@ func fromValue(v entity.Value) interface{} {
 
 // QueryRequest is the JSON representation of a query.
 type QueryRequest struct {
-	EntityType     string         `json:"entity_type"`
-	Filters        []FilterSpec   `json:"filters,omitempty"`
-	TimeRange      *TimeRangeSpec `json:"time_range,omitempty"`
-	Limit          int            `json:"limit,omitempty"`
-	Reverse        bool           `json:"reverse,omitempty"`
-	IncludeHistory bool           `json:"include_history,omitempty"`
+	EntityType  string         `json:"entity_type"`
+	Filters     []FilterSpec   `json:"filters,omitempty"`
+	TimeRange   *TimeRangeSpec `json:"time_range,omitempty"`
+	Limit       int            `json:"limit,omitempty"`
+	Reverse     bool           `json:"reverse,omitempty"`
+	AllVersions bool           `json:"all_versions,omitempty"`
+	MatchAny    bool           `json:"match_any,omitempty"`
 }
 
 // FilterSpec is a single filter in a query.
@@ -504,12 +498,13 @@ func (r *QueryRequest) ToQuery() (*store.Query, error) {
 	}
 
 	return &store.Query{
-		EntityType:     r.EntityType,
-		Filters:        filters,
-		TimeRange:      timeRange,
-		Limit:          r.Limit,
-		Reverse:        r.Reverse,
-		IncludeHistory: r.IncludeHistory,
+		EntityType:  r.EntityType,
+		Filters:     filters,
+		TimeRange:   timeRange,
+		Limit:       r.Limit,
+		Reverse:     r.Reverse,
+		AllVersions: r.AllVersions,
+		MatchAny:    r.MatchAny,
 	}, nil
 }
 

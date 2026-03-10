@@ -52,10 +52,21 @@ func NewEntityStore(kv KVStore, indexStore IndexStore, registry *index.Registry,
 // Write stores an entity version and updates all configured indexes.
 // Each write creates a new version - no overwrites occur.
 func (s *EntityStore) Write(e *entity.Entity) error {
+	// Check if there's an existing latest version and remove its _latest indexes
+	existingLatest, err := s.Get(e.Type, e.ID)
+	if err != nil && err != ErrNotFound {
+		return fmt.Errorf("check existing: %w", err)
+	}
+	if existingLatest != nil {
+		if err := s.deleteLatestIndexes(existingLatest); err != nil {
+			return fmt.Errorf("delete old latest indexes: %w", err)
+		}
+	}
+
 	// Use versioned KV key: {type}:{id}:{timestamp_hex}
 	kvKey := buildVersionedKVKey(e.Type, e.ID, e.Timestamp)
 
-	// Serialize full entity → KV (append-only, no deletion of old versions)
+	// Serialize full entity → KV (versioned storage, old versions preserved)
 	blob, err := s.serializer.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("serialize entity: %w", err)
@@ -76,23 +87,38 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 		return fmt.Errorf("index set _by_id: %w", err)
 	}
 
+	// Write the _latest_all index entry
+	latestAllKey := s.keyBuilder.BuildLatestAllKey(e.Type, e.ID)
+	if err := s.indexStore.Set(latestAllKey, nil); err != nil {
+		return fmt.Errorf("index set _latest_all: %w", err)
+	}
+
 	// Look up index config for this entity type
 	cfg := s.registry.Get(e.Type)
 	if cfg == nil {
 		return nil // No indexes configured, just store in KV
 	}
 
-	// Write one index entry per indexed field
+	// Write one index entry per indexed field (both versioned and _latest)
 	for _, idxField := range cfg.Indexes {
 		val, ok := idxField.Path.Extract(e.Fields)
 		if !ok {
 			continue
 		}
 
+		// Versioned index keys
 		keys := index.BuildIndexKeys(e.Type, idxField.Name, val, e.Timestamp, e.ID)
 		for _, key := range keys {
 			if err := s.indexStore.Set(key, nil); err != nil {
 				return fmt.Errorf("index set %s: %w", idxField.Name, err)
+			}
+		}
+
+		// Latest-only index keys
+		latestKeys := index.BuildLatestIndexKeys(e.Type, idxField.Name, val, e.ID)
+		for _, key := range latestKeys {
+			if err := s.indexStore.Set(key, nil); err != nil {
+				return fmt.Errorf("index set _latest/%s: %w", idxField.Name, err)
 			}
 		}
 	}
@@ -199,27 +225,67 @@ func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptio
 }
 
 // Delete removes a specific version of an entity and all its index entries.
+// If deleting the latest version, updates _latest indexes to the new latest.
 func (s *EntityStore) Delete(e *entity.Entity) error {
+	// Check if this is the latest version
+	latest, err := s.Get(e.Type, e.ID)
+	isLatest := err == nil && latest != nil && latest.Timestamp == e.Timestamp
+
 	// Use versioned KV key
 	kvKey := buildVersionedKVKey(e.Type, e.ID, e.Timestamp)
 	if err := s.kv.Delete(kvKey); err != nil && err != ErrNotFound {
 		return fmt.Errorf("kv delete: %w", err)
 	}
-	return s.deleteIndexes(e)
+
+	if err := s.deleteIndexes(e); err != nil {
+		return err
+	}
+
+	// If this was the latest version, update _latest indexes
+	if isLatest {
+		// Delete old _latest indexes
+		if err := s.deleteLatestIndexes(e); err != nil {
+			return fmt.Errorf("delete latest indexes: %w", err)
+		}
+
+		// Find new latest and create its _latest indexes
+		newLatest, err := s.Get(e.Type, e.ID)
+		if err == nil && newLatest != nil {
+			if err := s.writeLatestIndexes(newLatest); err != nil {
+				return fmt.Errorf("write new latest indexes: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // DeleteEntity removes ALL versions of an entity.
 func (s *EntityStore) DeleteEntity(entityType, entityID string) error {
+	// Get latest version to clean up _latest indexes
+	latest, _ := s.Get(entityType, entityID)
+
 	// Get all versions
 	versions, err := s.GetHistory(entityType, entityID, nil)
 	if err != nil {
 		return fmt.Errorf("get history: %w", err)
 	}
 
-	// Delete each version
+	// Delete each version's indexes (but skip _latest handling since we do it once below)
 	for _, e := range versions {
-		if err := s.Delete(e); err != nil {
-			return fmt.Errorf("delete version: %w", err)
+		kvKey := buildVersionedKVKey(e.Type, e.ID, e.Timestamp)
+		if err := s.kv.Delete(kvKey); err != nil && err != ErrNotFound {
+			return fmt.Errorf("kv delete: %w", err)
+		}
+		if err := s.deleteIndexes(e); err != nil {
+			return fmt.Errorf("delete version indexes: %w", err)
+		}
+	}
+
+	// Delete _latest indexes once
+	if latest != nil {
+		if err := s.deleteLatestIndexes(latest); err != nil {
+			return fmt.Errorf("delete latest indexes: %w", err)
 		}
 	}
 
@@ -256,6 +322,68 @@ func (s *EntityStore) deleteIndexes(e *entity.Entity) error {
 		for _, key := range keys {
 			if err := s.indexStore.Delete(key); err != nil {
 				return fmt.Errorf("index delete %s: %w", idxField.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// writeLatestIndexes writes the _latest index entries for an entity.
+func (s *EntityStore) writeLatestIndexes(e *entity.Entity) error {
+	// Write the _latest_all index entry
+	latestAllKey := s.keyBuilder.BuildLatestAllKey(e.Type, e.ID)
+	if err := s.indexStore.Set(latestAllKey, nil); err != nil {
+		return fmt.Errorf("index set _latest_all: %w", err)
+	}
+
+	// Write _latest field index entries
+	cfg := s.registry.Get(e.Type)
+	if cfg == nil {
+		return nil
+	}
+
+	for _, idxField := range cfg.Indexes {
+		val, ok := idxField.Path.Extract(e.Fields)
+		if !ok {
+			continue
+		}
+
+		keys := index.BuildLatestIndexKeys(e.Type, idxField.Name, val, e.ID)
+		for _, key := range keys {
+			if err := s.indexStore.Set(key, nil); err != nil {
+				return fmt.Errorf("index set _latest/%s: %w", idxField.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// deleteLatestIndexes removes only the _latest index entries for an entity.
+func (s *EntityStore) deleteLatestIndexes(e *entity.Entity) error {
+	// Delete the _latest_all index entry
+	latestAllKey := s.keyBuilder.BuildLatestAllKey(e.Type, e.ID)
+	if err := s.indexStore.Delete(latestAllKey); err != nil {
+		return fmt.Errorf("index delete _latest_all: %w", err)
+	}
+
+	// Delete _latest field index entries
+	cfg := s.registry.Get(e.Type)
+	if cfg == nil {
+		return nil
+	}
+
+	for _, idxField := range cfg.Indexes {
+		val, ok := idxField.Path.Extract(e.Fields)
+		if !ok {
+			continue
+		}
+
+		keys := index.BuildLatestIndexKeys(e.Type, idxField.Name, val, e.ID)
+		for _, key := range keys {
+			if err := s.indexStore.Delete(key); err != nil {
+				return fmt.Errorf("index delete _latest/%s: %w", idxField.Name, err)
 			}
 		}
 	}
@@ -341,7 +469,7 @@ func (s *EntityStore) storeConfigHash(entityType string, hash string) error {
 // Reindex rebuilds all indexes for a given entity type.
 // This clears existing indexes and re-indexes all entities from the KV store.
 func (s *EntityStore) Reindex(entityType string) error {
-	// 1. Delete all existing indexes for this entity type
+	// 1. Delete all existing indexes for this entity type (includes _latest, _all, etc.)
 	prefix := []byte(entityType + "/")
 	var keysToDelete [][]byte
 	if err := s.indexStore.ScanPrefix(prefix, func(key []byte) bool {
@@ -360,6 +488,10 @@ func (s *EntityStore) Reindex(entityType string) error {
 	}
 
 	// 2. Scan KV store for all entities of this type and re-index them
+	// Track the latest version per entity ID for _latest indexes
+	var lastEntityID string
+	var latestEntity *entity.Entity
+
 	kvPrefix := entityType + ":"
 	if err := s.kv.ScanPrefix(kvPrefix, func(key string, value []byte) bool {
 		var e entity.Entity
@@ -367,6 +499,19 @@ func (s *EntityStore) Reindex(entityType string) error {
 			log.Printf("reindex: failed to unmarshal entity %s: %v", key, err)
 			return true // Continue with other entities
 		}
+
+		// When entity ID changes, write _latest indexes for previous entity
+		if lastEntityID != "" && lastEntityID != e.ID && latestEntity != nil {
+			if err := s.writeLatestIndexes(latestEntity); err != nil {
+				log.Printf("reindex: failed to write _latest indexes for %s/%s: %v", latestEntity.Type, latestEntity.ID, err)
+			}
+		}
+
+		// Track this as the latest (scan is ordered, so last one per ID is latest)
+		if e.ID != lastEntityID || latestEntity == nil || e.Timestamp > latestEntity.Timestamp {
+			latestEntity = &e
+		}
+		lastEntityID = e.ID
 
 		// Write the _all index entry
 		allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
@@ -405,6 +550,13 @@ func (s *EntityStore) Reindex(entityType string) error {
 		return true
 	}); err != nil {
 		return fmt.Errorf("scan entities for reindex: %w", err)
+	}
+
+	// Write _latest indexes for the final entity
+	if latestEntity != nil {
+		if err := s.writeLatestIndexes(latestEntity); err != nil {
+			log.Printf("reindex: failed to write _latest indexes for %s/%s: %v", latestEntity.Type, latestEntity.ID, err)
+		}
 	}
 
 	return nil

@@ -16,6 +16,12 @@ const AllFieldName = "_all"
 // ByIDFieldName is the synthetic field name for the _by_id index (entity versions).
 const ByIDFieldName = "_by_id"
 
+// LatestFieldName is the synthetic field name prefix for latest-only indexes.
+const LatestFieldName = "_latest"
+
+// LatestAllFieldName is the synthetic field name for querying all latest entities.
+const LatestAllFieldName = "_latest_all"
+
 // KeyBuilder builds index keys following the schema:
 // {entity_type}/{field_name}/{field_value_bytes}/{timestamp_unix_ns}/{entity_id}
 type KeyBuilder struct {
@@ -192,6 +198,128 @@ func (kb *KeyBuilder) BuildByIDRangeEnd(entityType, entityID string, toTimestamp
 	return kb.copyBytes()
 }
 
+// BuildLatestKey constructs a _latest index key for latest-version-only queries.
+// Format: {entity_type}/_latest/{field_name}/{encoded_value}/{entity_id}
+func (kb *KeyBuilder) BuildLatestKey(entityType, fieldName string, value entity.Value, entityID string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.Write(EncodeValue(value))
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(entityID)
+	return kb.copyBytes()
+}
+
+// BuildLatestAllKey constructs the _latest_all index key.
+// Format: {entity_type}/_latest_all/{entity_id}
+func (kb *KeyBuilder) BuildLatestAllKey(entityType, entityID string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestAllFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(entityID)
+	return kb.copyBytes()
+}
+
+// BuildLatestPrefix constructs a prefix for scanning _latest indexes by field.
+// Format: {entity_type}/_latest/{field_name}/
+func (kb *KeyBuilder) BuildLatestPrefix(entityType, fieldName string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+	return kb.copyBytes()
+}
+
+// BuildLatestValuePrefix constructs a prefix for scanning _latest indexes by field and value.
+// Format: {entity_type}/_latest/{field_name}/{encoded_value}/
+func (kb *KeyBuilder) BuildLatestValuePrefix(entityType, fieldName string, value entity.Value) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.Write(EncodeValue(value))
+	kb.buf.WriteByte(Separator)
+	return kb.copyBytes()
+}
+
+// BuildLatestAllPrefix constructs a prefix for scanning all latest entities.
+// Format: {entity_type}/_latest_all/
+func (kb *KeyBuilder) BuildLatestAllPrefix(entityType string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestAllFieldName)
+	kb.buf.WriteByte(Separator)
+	return kb.copyBytes()
+}
+
+// BuildLatestComparisonRangeStart constructs a range start for _latest comparison queries.
+func (kb *KeyBuilder) BuildLatestComparisonRangeStart(entityType, fieldName string, value entity.Value, op string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+
+	switch op {
+	case "lt", "lte":
+		// Start at beginning of field values
+	case "gt":
+		// Start after the specified value
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+		kb.buf.WriteByte(0xFF)
+	case "gte":
+		// Start at the specified value (inclusive)
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+	}
+
+	return kb.copyBytes()
+}
+
+// BuildLatestComparisonRangeEnd constructs a range end for _latest comparison queries.
+func (kb *KeyBuilder) BuildLatestComparisonRangeEnd(entityType, fieldName string, value entity.Value, op string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(LatestFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+
+	switch op {
+	case "lt":
+		// End before the specified value
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+	case "lte":
+		// End after all entries with this value
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+		kb.buf.WriteByte(0xFF)
+	case "gt", "gte":
+		// End at the end of the field's value space
+		kb.buf.WriteByte(0xFF)
+	}
+
+	return kb.copyBytes()
+}
+
 func (kb *KeyBuilder) copyBytes() []byte {
 	result := make([]byte, kb.buf.Len())
 	copy(result, kb.buf.Bytes())
@@ -287,6 +415,21 @@ func BuildIndexKeys(entityType, fieldName string, value entity.Value, timestamp 
 	return [][]byte{kb.BuildKey(entityType, fieldName, value, timestamp, entityID)}
 }
 
+// BuildLatestIndexKeys builds all _latest index keys for a value, handling array explosion.
+func BuildLatestIndexKeys(entityType, fieldName string, value entity.Value, entityID string) [][]byte {
+	kb := NewKeyBuilder()
+
+	if value.Kind == entity.KindArray {
+		keys := make([][]byte, 0, len(value.Arr))
+		for _, elem := range value.Arr {
+			keys = append(keys, kb.BuildLatestKey(entityType, fieldName, elem, entityID))
+		}
+		return keys
+	}
+
+	return [][]byte{kb.BuildLatestKey(entityType, fieldName, value, entityID)}
+}
+
 // ParseIndexKey extracts components from an index key.
 // Returns entityType, fieldName, timestamp, entityID.
 func ParseIndexKey(key []byte) (entityType, fieldName string, timestamp int64, entityID string) {
@@ -337,5 +480,37 @@ func ParseByIDIndexKey(key []byte) (entityType, entityID string, timestamp int64
 	if len(parts[3]) == 8 {
 		timestamp = encoding.DecodeTimestamp(parts[3])
 	}
+	return
+}
+
+// ParseLatestIndexKey extracts components from a _latest index key.
+// Format: {entity_type}/_latest/{field_name}/{encoded_value}/{entity_id}
+// Returns entityType, fieldName, entityID.
+func ParseLatestIndexKey(key []byte) (entityType, fieldName, entityID string) {
+	parts := bytes.SplitN(key, []byte{Separator}, 5)
+	if len(parts) < 5 {
+		return
+	}
+
+	entityType = string(parts[0])
+	// parts[1] is "_latest"
+	fieldName = string(parts[2])
+	// parts[3] is the encoded value (we skip it)
+	entityID = string(parts[4])
+	return
+}
+
+// ParseLatestAllIndexKey extracts components from a _latest_all index key.
+// Format: {entity_type}/_latest_all/{entity_id}
+// Returns entityType, entityID.
+func ParseLatestAllIndexKey(key []byte) (entityType, entityID string) {
+	parts := bytes.SplitN(key, []byte{Separator}, 3)
+	if len(parts) < 3 {
+		return
+	}
+
+	entityType = string(parts[0])
+	// parts[1] is "_latest_all"
+	entityID = string(parts[2])
 	return
 }

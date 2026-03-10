@@ -7,7 +7,6 @@ A lightweight schema-free entity database with configurable field-level indexes,
 - **Schema-free entities** — Store any entity type with dynamic fields
 - **Configurable indexes** — Define which fields are indexed per entity type via YAML config
 - **Time-series queries** — Efficient range scans with timestamps embedded in index keys
-- **Entity versioning** — Append-only writes preserve full history; retrieve any version by timestamp
 - **O(1) entity retrieval** — Full entities stored in key-value store
 - **Persistent storage** — BadgerDB-backed for durability
 - **HTTP API** — Simple REST interface for all operations
@@ -184,17 +183,29 @@ Returns the latest version of the entity.
 ### Get Entity History
 
 ```
-GET /entities/{type}/{id}/history?from=<timestamp>&to=<timestamp>&limit=<n>&reverse=true
+GET /entities/{type}/{id}/history?from=<timestamp>&to=<timestamp>&limit=<n>&reverse=true&cursor=<timestamp>
 ```
 
-Returns all versions of an entity. Each write creates a new version with its own timestamp.
+Returns versions of an entity with cursor-based pagination.
 
 | Parameter | Description |
 |-----------|-------------|
 | `from` | Start of time range (Unix nanoseconds, inclusive) |
 | `to` | End of time range (Unix nanoseconds, inclusive) |
-| `limit` | Maximum number of versions to return |
+| `limit` | Maximum versions to return (default: 100) |
 | `reverse` | If `true`, return newest versions first |
+| `cursor` | Pagination cursor (timestamp from previous response's `next`) |
+
+Response:
+
+```json
+{
+  "items": [...],
+  "next": "1704067200000000000"
+}
+```
+
+The `next` field is only present if there are more results.
 
 ### Delete Entity
 
@@ -220,9 +231,21 @@ POST /query
     "from": 1704067200000000000,
     "to": 1704153600000000000
   },
-  "limit": 100
+  "limit": 100,
+  "reverse": false,
+  "all_versions": false
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `entity_type` | Required. Entity type to query |
+| `filters` | Filter conditions |
+| `time_range` | Optional time bounds (Unix nanoseconds) |
+| `limit` | Maximum results to return |
+| `reverse` | If `true`, return newest first |
+| `all_versions` | If `false` (default), return only entities whose latest version matches. If `true`, return all matching historical versions |
+| `match_any` | If `false` (default), use AND semantics (match all filters). If `true`, use OR semantics (match any filter) |
 
 ### Filter Operations
 
@@ -265,7 +288,7 @@ Full entities are stored as serialized blobs. Each version is stored separately,
 {entity_type}:{entity_id}:{timestamp_hex} → serialized entity blob
 ```
 
-This append-only design preserves full history and enables efficient version lookups.
+This versioned design preserves full history and enables efficient version lookups.
 
 ### Index Store
 
@@ -280,6 +303,8 @@ Synthetic indexes enable efficient access patterns:
 ```
 {entity_type}/_all/{timestamp_ns}/{entity_id} → (empty)      # time-series queries
 {entity_type}/_by_id/{entity_id}/{timestamp_ns} → (empty)    # version history
+{entity_type}/_latest/{field}/{value}/{entity_id} → (empty)  # current state queries
+{entity_type}/_latest_all/{entity_id} → (empty)              # all current entities
 ```
 
 ### Value Encoding

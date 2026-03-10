@@ -357,7 +357,7 @@ func TestQueryWithVersioning(t *testing.T) {
 		}
 	}
 
-	// Query without IncludeHistory (default) - should return only latest version per entity
+	// Query without AllVersions (default) - should return only entities whose latest version matches
 	results, err := s.Query(&store.Query{
 		EntityType: "gamestate",
 	})
@@ -379,20 +379,21 @@ func TestQueryWithVersioning(t *testing.T) {
 		}
 	}
 
-	// Query with IncludeHistory - should return all versions
+	// Query with AllVersions - should return all versions
 	resultsWithHistory, err := s.Query(&store.Query{
-		EntityType:     "gamestate",
-		IncludeHistory: true,
+		EntityType:  "gamestate",
+		AllVersions: true,
 	})
 	if err != nil {
-		t.Fatalf("Query with history failed: %v", err)
+		t.Fatalf("Query with all versions failed: %v", err)
 	}
 
 	if len(resultsWithHistory) != 6 {
 		t.Errorf("Expected 6 versions (all history), got %d", len(resultsWithHistory))
 	}
 
-	// Query by field with deduplication
+	// Query by field - should return only entities whose LATEST version matches the filter
+	// game-1 latest: score=300, game-2 latest: score=150 - both match score >= 100
 	resultsFiltered, err := s.Query(&store.Query{
 		EntityType: "gamestate",
 		Filters: []store.FieldFilter{
@@ -403,9 +404,9 @@ func TestQueryWithVersioning(t *testing.T) {
 		t.Fatalf("Query filtered failed: %v", err)
 	}
 
-	// Should return only 2 entities (latest versions) that match the filter
+	// Should return only 2 entities (whose latest versions match the filter)
 	if len(resultsFiltered) != 2 {
-		t.Errorf("Expected 2 entities with score >= 100, got %d", len(resultsFiltered))
+		t.Errorf("Expected 2 entities with latest score >= 100, got %d", len(resultsFiltered))
 	}
 }
 
