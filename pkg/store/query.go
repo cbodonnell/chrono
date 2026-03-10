@@ -50,6 +50,14 @@ type entityKey struct {
 	ID        string
 }
 
+// Less returns true if this key should sort before other.
+func (k entityKey) Less(other entityKey) bool {
+	if k.Timestamp != other.Timestamp {
+		return k.Timestamp < other.Timestamp
+	}
+	return k.ID < other.ID
+}
+
 // Query executes a query and returns matching entities.
 // TODO: figure out multi-tenancy within the database
 func (s *EntityStore) Query(q *Query) ([]*entity.Entity, error) {
@@ -82,20 +90,9 @@ func (s *EntityStore) queryLatestOnly(q *Query) ([]*entity.Entity, error) {
 		}
 
 		// Combine result sets (intersect for AND, union for OR)
-		sort.Slice(resultSets, func(i, j int) bool {
-			return len(resultSets[i]) < len(resultSets[j])
-		})
-
-		result := resultSets[0]
-		for i := 1; i < len(resultSets); i++ {
-			if q.MatchAny {
-				result = unionIDs(result, resultSets[i])
-			} else {
-				result = intersectIDs(result, resultSets[i])
-				if len(result) == 0 {
-					return nil, nil
-				}
-			}
+		result := combineResultSets(resultSets, q.MatchAny)
+		if result == nil {
+			return nil, nil
 		}
 
 		entityIDs = make([]string, 0, len(result))
@@ -127,20 +124,9 @@ func (s *EntityStore) queryAllVersions(q *Query) ([]*entity.Entity, error) {
 	}
 
 	// Combine result sets (intersect for AND, union for OR)
-	sort.Slice(resultSets, func(i, j int) bool {
-		return len(resultSets[i]) < len(resultSets[j])
-	})
-
-	result := resultSets[0]
-	for i := 1; i < len(resultSets); i++ {
-		if q.MatchAny {
-			result = union(result, resultSets[i])
-		} else {
-			result = intersect(result, resultSets[i])
-			if len(result) == 0 {
-				return nil, nil
-			}
-		}
+	result := combineResultSets(resultSets, q.MatchAny)
+	if result == nil {
+		return nil, nil
 	}
 
 	// Fetch entities from KV store
@@ -241,25 +227,61 @@ func (s *EntityStore) scanLatestFilter(entityType string, filter FieldFilter) (m
 	return ids, nil
 }
 
-// intersectIDs returns the intersection of two entity ID sets.
-func intersectIDs(a, b map[string]struct{}) map[string]struct{} {
-	result := make(map[string]struct{})
-	for id := range a {
-		if _, ok := b[id]; ok {
-			result[id] = struct{}{}
+// intersectSets returns the intersection of two sets.
+func intersectSets[K comparable](a, b map[K]struct{}) map[K]struct{} {
+	result := make(map[K]struct{})
+	for key := range a {
+		if _, ok := b[key]; ok {
+			result[key] = struct{}{}
 		}
 	}
 	return result
 }
 
-// unionIDs returns the union of two entity ID sets.
-func unionIDs(a, b map[string]struct{}) map[string]struct{} {
-	result := make(map[string]struct{}, len(a)+len(b))
-	for id := range a {
-		result[id] = struct{}{}
+// unionSets returns the union of two sets.
+func unionSets[K comparable](a, b map[K]struct{}) map[K]struct{} {
+	result := make(map[K]struct{}, len(a)+len(b))
+	for key := range a {
+		result[key] = struct{}{}
 	}
-	for id := range b {
-		result[id] = struct{}{}
+	for key := range b {
+		result[key] = struct{}{}
+	}
+	return result
+}
+
+// sortSlice sorts a slice using the provided less function, optionally in reverse order.
+func sortSlice[T any](items []T, less func(a, b T) bool, reverse bool) {
+	sort.Slice(items, func(i, j int) bool {
+		if reverse {
+			return less(items[j], items[i])
+		}
+		return less(items[i], items[j])
+	})
+}
+
+// combineResultSets combines multiple result sets using intersection (AND) or union (OR).
+// Returns nil if the result is empty during intersection.
+func combineResultSets[K comparable](resultSets []map[K]struct{}, matchAny bool) map[K]struct{} {
+	if len(resultSets) == 0 {
+		return nil
+	}
+
+	// Sort by size for efficiency (smallest first for intersection)
+	sort.Slice(resultSets, func(i, j int) bool {
+		return len(resultSets[i]) < len(resultSets[j])
+	})
+
+	result := resultSets[0]
+	for i := 1; i < len(resultSets); i++ {
+		if matchAny {
+			result = unionSets(result, resultSets[i])
+		} else {
+			result = intersectSets(result, resultSets[i])
+			if len(result) == 0 {
+				return nil
+			}
+		}
 	}
 	return result
 }
@@ -287,15 +309,9 @@ func (s *EntityStore) fetchLatestEntities(entityType string, entityIDs []string,
 	}
 
 	// Sort by timestamp
-	if reverse {
-		sort.Slice(entities, func(i, j int) bool {
-			return entities[i].Timestamp > entities[j].Timestamp
-		})
-	} else {
-		sort.Slice(entities, func(i, j int) bool {
-			return entities[i].Timestamp < entities[j].Timestamp
-		})
-	}
+	sortSlice(entities, func(a, b *entity.Entity) bool {
+		return a.Timestamp < b.Timestamp
+	}, reverse)
 
 	// Apply limit
 	if limit > 0 && len(entities) > limit {
@@ -312,21 +328,7 @@ func (s *EntityStore) fetchVersionedEntities(entityType string, keys map[entityK
 	for key := range keys {
 		sorted = append(sorted, key)
 	}
-	if reverse {
-		sort.Slice(sorted, func(i, j int) bool {
-			if sorted[i].Timestamp != sorted[j].Timestamp {
-				return sorted[i].Timestamp > sorted[j].Timestamp
-			}
-			return sorted[i].ID < sorted[j].ID
-		})
-	} else {
-		sort.Slice(sorted, func(i, j int) bool {
-			if sorted[i].Timestamp != sorted[j].Timestamp {
-				return sorted[i].Timestamp < sorted[j].Timestamp
-			}
-			return sorted[i].ID < sorted[j].ID
-		})
-	}
+	sortSlice(sorted, entityKey.Less, reverse)
 
 	// Apply limit
 	if limit > 0 && len(sorted) > limit {
@@ -362,22 +364,8 @@ func (s *EntityStore) scanFilter(entityType string, filter FieldFilter, timeRang
 	}
 
 	switch filter.Op {
-	case OpEq:
-		// Exact match: scan prefix with value
-		start := kb.BuildRangeStart(entityType, filter.Field, filter.Value, fromTS)
-		end := kb.BuildRangeEnd(entityType, filter.Field, filter.Value, toTS)
-
-		err := s.indexStore.Scan(start, end, func(key []byte) bool {
-			_, _, ts, id := index.ParseIndexKey(key)
-			keys[entityKey{Timestamp: ts, ID: id}] = struct{}{}
-			return true
-		})
-		if err != nil {
-			return nil, err
-		}
-
-	case OpContains:
-		// For array contains, same as OpEq on the element value
+	case OpEq, OpContains:
+		// Exact match or array contains: scan range with value
 		start := kb.BuildRangeStart(entityType, filter.Field, filter.Value, fromTS)
 		end := kb.BuildRangeEnd(entityType, filter.Field, filter.Value, toTS)
 
@@ -431,26 +419,4 @@ func opToString(op Op) string {
 	}
 }
 
-// intersect returns the intersection of two entity key sets.
-func intersect(a, b map[entityKey]struct{}) map[entityKey]struct{} {
-	result := make(map[entityKey]struct{})
-	for key := range a {
-		if _, ok := b[key]; ok {
-			result[key] = struct{}{}
-		}
-	}
-	return result
-}
-
-// union returns the union of two entity key sets.
-func union(a, b map[entityKey]struct{}) map[entityKey]struct{} {
-	result := make(map[entityKey]struct{}, len(a)+len(b))
-	for key := range a {
-		result[key] = struct{}{}
-	}
-	for key := range b {
-		result[key] = struct{}{}
-	}
-	return result
-}
 
