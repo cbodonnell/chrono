@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"math"
 	"sort"
 
 	"github.com/cbodonnell/chrono/pkg/entity"
@@ -103,7 +105,7 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 func (s *EntityStore) Get(entityType, entityID string) (*entity.Entity, error) {
 	// Build range for reverse scan of _by_id index
 	start := s.keyBuilder.BuildByIDRangeStart(entityType, entityID, 0)
-	end := s.keyBuilder.BuildByIDRangeEnd(entityType, entityID, 1<<62) // max reasonable timestamp
+	end := s.keyBuilder.BuildByIDRangeEnd(entityType, entityID, math.MaxInt64)
 
 	var latestTimestamp int64 = -1
 	err := s.indexStore.ReverseScan(start, end, func(key []byte) bool {
@@ -148,7 +150,7 @@ type HistoryOptions struct {
 // GetHistory retrieves all versions of an entity.
 func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptions) ([]*entity.Entity, error) {
 	var fromTS int64 = 0
-	var toTS int64 = 1 << 62 // max reasonable timestamp
+	var toTS int64 = math.MaxInt64
 
 	if opts != nil && opts.TimeRange != nil {
 		fromTS = opts.TimeRange.From
@@ -362,19 +364,22 @@ func (s *EntityStore) Reindex(entityType string) error {
 	if err := s.kv.ScanPrefix(kvPrefix, func(key string, value []byte) bool {
 		var e entity.Entity
 		if err := s.serializer.Unmarshal(value, &e); err != nil {
-			return true // Skip malformed entities
+			log.Printf("reindex: failed to unmarshal entity %s: %v", key, err)
+			return true // Continue with other entities
 		}
 
 		// Write the _all index entry
 		allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
 		if err := s.indexStore.Set(allKey, nil); err != nil {
-			return true // Continue on error
+			log.Printf("reindex: failed to write _all index for %s/%s: %v", e.Type, e.ID, err)
+			return true // Continue with other entities
 		}
 
 		// Write the _by_id index entry
 		byIDKey := s.keyBuilder.BuildByIDKey(e.Type, e.ID, e.Timestamp)
 		if err := s.indexStore.Set(byIDKey, nil); err != nil {
-			return true // Continue on error
+			log.Printf("reindex: failed to write _by_id index for %s/%s: %v", e.Type, e.ID, err)
+			return true // Continue with other entities
 		}
 
 		// Write field indexes based on current config
@@ -391,7 +396,9 @@ func (s *EntityStore) Reindex(entityType string) error {
 
 			keys := index.BuildIndexKeys(e.Type, idxField.Name, val, e.Timestamp, e.ID)
 			for _, k := range keys {
-				s.indexStore.Set(k, nil)
+				if err := s.indexStore.Set(k, nil); err != nil {
+					log.Printf("reindex: failed to write field index %s for %s/%s: %v", idxField.Name, e.Type, e.ID, err)
+				}
 			}
 		}
 
