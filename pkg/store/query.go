@@ -22,11 +22,12 @@ const (
 
 // Query defines a query against the entity store.
 type Query struct {
-	EntityType string
-	Filters    []FieldFilter // AND semantics
-	TimeRange  *TimeRange
-	Limit      int
-	Reverse    bool // If true, return results in reverse chronological order (newest first)
+	EntityType     string
+	Filters        []FieldFilter // AND semantics
+	TimeRange      *TimeRange
+	Limit          int
+	Reverse        bool // If true, return results in reverse chronological order (newest first)
+	IncludeHistory bool // If true, return all versions; if false (default), return only latest per entity ID
 }
 
 // FieldFilter specifies a filter on a single field.
@@ -81,7 +82,7 @@ func (s *EntityStore) Query(q *Query) ([]*entity.Entity, error) {
 	}
 
 	// Fetch entities from KV store
-	return s.fetchEntities(q.EntityType, result, q.Limit, q.Reverse)
+	return s.fetchEntities(q.EntityType, result, q.Limit, q.Reverse, q.IncludeHistory)
 }
 
 // queryAll queries using the _all index for time-series access.
@@ -115,7 +116,7 @@ func (s *EntityStore) queryAll(q *Query) ([]*entity.Entity, error) {
 		return nil, err
 	}
 
-	return s.fetchEntities(q.EntityType, keys, q.Limit, q.Reverse)
+	return s.fetchEntities(q.EntityType, keys, q.Limit, q.Reverse, q.IncludeHistory)
 }
 
 // scanFilter scans the index for a single filter.
@@ -283,31 +284,62 @@ func intersect(a, b map[entityKey]struct{}) map[entityKey]struct{} {
 }
 
 // fetchEntities fetches entities from KV store and returns them sorted by timestamp.
-func (s *EntityStore) fetchEntities(entityType string, keys map[entityKey]struct{}, limit int, reverse bool) ([]*entity.Entity, error) {
-	// Sort by timestamp
-	sorted := make([]entityKey, 0, len(keys))
+// When includeHistory is false, only the latest version of each entity ID is returned.
+func (s *EntityStore) fetchEntities(entityType string, keys map[entityKey]struct{}, limit int, reverse bool, includeHistory bool) ([]*entity.Entity, error) {
+	// If including history, fetch all matched versions
+	if includeHistory {
+		// Sort by timestamp
+		sorted := make([]entityKey, 0, len(keys))
+		for key := range keys {
+			sorted = append(sorted, key)
+		}
+		if reverse {
+			sort.Slice(sorted, func(i, j int) bool {
+				if sorted[i].Timestamp != sorted[j].Timestamp {
+					return sorted[i].Timestamp > sorted[j].Timestamp
+				}
+				return sorted[i].ID < sorted[j].ID
+			})
+		} else {
+			sort.Slice(sorted, func(i, j int) bool {
+				if sorted[i].Timestamp != sorted[j].Timestamp {
+					return sorted[i].Timestamp < sorted[j].Timestamp
+				}
+				return sorted[i].ID < sorted[j].ID
+			})
+		}
+
+		// Apply limit
+		if limit > 0 && len(sorted) > limit {
+			sorted = sorted[:limit]
+		}
+
+		// Fetch entities
+		entities := make([]*entity.Entity, 0, len(sorted))
+		for _, key := range sorted {
+			e, err := s.GetVersion(entityType, key.ID, key.Timestamp)
+			if err != nil {
+				if err == ErrNotFound {
+					continue // Entity was deleted
+				}
+				return nil, err
+			}
+			entities = append(entities, e)
+		}
+
+		return entities, nil
+	}
+
+	// Not including history - get unique entity IDs and fetch their LATEST versions
+	seenIDs := make(map[string]bool)
 	for key := range keys {
-		sorted = append(sorted, key)
-	}
-	if reverse {
-		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].Timestamp > sorted[j].Timestamp
-		})
-	} else {
-		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].Timestamp < sorted[j].Timestamp
-		})
+		seenIDs[key.ID] = true
 	}
 
-	// Apply limit
-	if limit > 0 && len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
-
-	// Fetch entities
-	entities := make([]*entity.Entity, 0, len(sorted))
-	for _, key := range sorted {
-		e, err := s.Get(entityType, key.ID)
+	// Fetch the latest version of each entity
+	entities := make([]*entity.Entity, 0, len(seenIDs))
+	for entityID := range seenIDs {
+		e, err := s.Get(entityType, entityID)
 		if err != nil {
 			if err == ErrNotFound {
 				continue // Entity was deleted
@@ -315,6 +347,22 @@ func (s *EntityStore) fetchEntities(entityType string, keys map[entityKey]struct
 			return nil, err
 		}
 		entities = append(entities, e)
+	}
+
+	// Sort by timestamp
+	if reverse {
+		sort.Slice(entities, func(i, j int) bool {
+			return entities[i].Timestamp > entities[j].Timestamp
+		})
+	} else {
+		sort.Slice(entities, func(i, j int) bool {
+			return entities[i].Timestamp < entities[j].Timestamp
+		})
+	}
+
+	// Apply limit
+	if limit > 0 && len(entities) > limit {
+		entities = entities[:limit]
 	}
 
 	return entities, nil

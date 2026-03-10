@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,18 +79,34 @@ func (s *Server) handleEntities(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleEntity handles GET/DELETE /entities/{type}/{id}.
+// handleEntity handles GET/DELETE /entities/{type}/{id} and GET /entities/{type}/{id}/history.
 func (s *Server) handleEntity(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /entities/{type}/{id}
+	// Parse path: /entities/{type}/{id} or /entities/{type}/{id}/history
 	path := strings.TrimPrefix(r.URL.Path, "/entities/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		http.Error(w, "invalid path: expected /entities/{type}/{id}", http.StatusBadRequest)
 		return
 	}
 
 	entityType := parts[0]
 	entityID := parts[1]
+
+	// Check if this is a history request
+	if len(parts) == 3 && parts[2] == "history" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.getEntityHistory(w, r, entityType, entityID)
+		return
+	}
+
+	// Regular entity request
+	if len(parts) > 2 {
+		http.Error(w, "invalid path: expected /entities/{type}/{id}", http.StatusBadRequest)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -142,24 +159,77 @@ func (s *Server) getEntity(w http.ResponseWriter, entityType, entityID string) {
 }
 
 // deleteEntity handles DELETE /entities/{type}/{id}.
+// Deletes ALL versions of the entity.
 func (s *Server) deleteEntity(w http.ResponseWriter, entityType, entityID string) {
-	// First get the entity to have full data for index cleanup
-	e, err := s.store.Get(entityType, entityID)
-	if err != nil {
+	if err := s.store.DeleteEntity(entityType, entityID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "entity not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("failed to get entity: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if err := s.store.Delete(e); err != nil {
 		http.Error(w, fmt.Sprintf("failed to delete entity: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// getEntityHistory handles GET /entities/{type}/{id}/history.
+func (s *Server) getEntityHistory(w http.ResponseWriter, r *http.Request, entityType, entityID string) {
+	opts := &store.HistoryOptions{}
+
+	// Parse query parameters
+	query := r.URL.Query()
+
+	if fromStr := query.Get("from"); fromStr != "" {
+		from, err := strconv.ParseInt(fromStr, 10, 64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid 'from' parameter: %v", err), http.StatusBadRequest)
+			return
+		}
+		if opts.TimeRange == nil {
+			opts.TimeRange = &store.TimeRange{}
+		}
+		opts.TimeRange.From = from
+	}
+
+	if toStr := query.Get("to"); toStr != "" {
+		to, err := strconv.ParseInt(toStr, 10, 64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid 'to' parameter: %v", err), http.StatusBadRequest)
+			return
+		}
+		if opts.TimeRange == nil {
+			opts.TimeRange = &store.TimeRange{}
+		}
+		opts.TimeRange.To = to
+	}
+
+	if limitStr := query.Get("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid 'limit' parameter: %v", err), http.StatusBadRequest)
+			return
+		}
+		opts.Limit = limit
+	}
+
+	if reverseStr := query.Get("reverse"); reverseStr == "true" {
+		opts.Reverse = true
+	}
+
+	history, err := s.store.GetHistory(entityType, entityID, opts)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to get history: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]EntityResponse, len(history))
+	for i, e := range history {
+		resp[i] = EntityResponse{}.FromEntity(e)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleQuery handles POST /query.

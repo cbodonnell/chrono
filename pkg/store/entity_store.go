@@ -47,24 +47,13 @@ func NewEntityStore(kv KVStore, indexStore IndexStore, registry *index.Registry,
 	return es, nil
 }
 
-// Write stores an entity and updates all configured indexes.
+// Write stores an entity version and updates all configured indexes.
+// Each write creates a new version - no overwrites occur.
 func (s *EntityStore) Write(e *entity.Entity) error {
-	kvKey := fmt.Sprintf("%s:%s", e.Type, e.ID)
+	// Use versioned KV key: {type}:{id}:{timestamp_hex}
+	kvKey := buildVersionedKVKey(e.Type, e.ID, e.Timestamp)
 
-	// 1. Check if entity already exists and delete old indexes
-	if existing, err := s.kv.Get(kvKey); err == nil {
-		var oldEntity entity.Entity
-		if err := s.serializer.Unmarshal(existing, &oldEntity); err != nil {
-			return fmt.Errorf("deserialize old entity: %w", err)
-		}
-		if err := s.deleteIndexes(&oldEntity); err != nil {
-			return fmt.Errorf("delete old indexes: %w", err)
-		}
-	} else if err != ErrNotFound {
-		return fmt.Errorf("kv get: %w", err)
-	}
-
-	// 2. Serialize full entity → KV
+	// Serialize full entity → KV (append-only, no deletion of old versions)
 	blob, err := s.serializer.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("serialize entity: %w", err)
@@ -73,19 +62,25 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 		return fmt.Errorf("kv set: %w", err)
 	}
 
-	// 3. Write the _all index entry for time-series queries
+	// Write the _all index entry for time-series queries
 	allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
 	if err := s.indexStore.Set(allKey, nil); err != nil {
 		return fmt.Errorf("index set _all: %w", err)
 	}
 
-	// 4. Look up index config for this entity type
+	// Write the _by_id index entry for version lookups
+	byIDKey := s.keyBuilder.BuildByIDKey(e.Type, e.ID, e.Timestamp)
+	if err := s.indexStore.Set(byIDKey, nil); err != nil {
+		return fmt.Errorf("index set _by_id: %w", err)
+	}
+
+	// Look up index config for this entity type
 	cfg := s.registry.Get(e.Type)
 	if cfg == nil {
 		return nil // No indexes configured, just store in KV
 	}
 
-	// 5. Write one index entry per indexed field
+	// Write one index entry per indexed field
 	for _, idxField := range cfg.Indexes {
 		val, ok := idxField.Path.Extract(e.Fields)
 		if !ok {
@@ -103,9 +98,33 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 	return nil
 }
 
-// Get retrieves an entity by type and ID.
+// Get retrieves the latest version of an entity by type and ID.
+// Uses reverse scan of _by_id index to find the most recent timestamp.
 func (s *EntityStore) Get(entityType, entityID string) (*entity.Entity, error) {
-	kvKey := fmt.Sprintf("%s:%s", entityType, entityID)
+	// Build range for reverse scan of _by_id index
+	start := s.keyBuilder.BuildByIDRangeStart(entityType, entityID, 0)
+	end := s.keyBuilder.BuildByIDRangeEnd(entityType, entityID, 1<<62) // max reasonable timestamp
+
+	var latestTimestamp int64 = -1
+	err := s.indexStore.ReverseScan(start, end, func(key []byte) bool {
+		_, _, ts := index.ParseByIDIndexKey(key)
+		latestTimestamp = ts
+		return false // Stop after first result (newest)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan _by_id index: %w", err)
+	}
+
+	if latestTimestamp < 0 {
+		return nil, ErrNotFound
+	}
+
+	return s.GetVersion(entityType, entityID, latestTimestamp)
+}
+
+// GetVersion retrieves a specific version of an entity by type, ID, and timestamp.
+func (s *EntityStore) GetVersion(entityType, entityID string, timestamp int64) (*entity.Entity, error) {
+	kvKey := buildVersionedKVKey(entityType, entityID, timestamp)
 	blob, err := s.kv.Get(kvKey)
 	if err != nil {
 		return nil, err
@@ -119,21 +138,104 @@ func (s *EntityStore) Get(entityType, entityID string) (*entity.Entity, error) {
 	return &e, nil
 }
 
-// Delete removes an entity and all its index entries.
+// HistoryOptions configures a GetHistory query.
+type HistoryOptions struct {
+	TimeRange *TimeRange
+	Limit     int
+	Reverse   bool // true = newest first (descending timestamp)
+}
+
+// GetHistory retrieves all versions of an entity.
+func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptions) ([]*entity.Entity, error) {
+	var fromTS int64 = 0
+	var toTS int64 = 1 << 62 // max reasonable timestamp
+
+	if opts != nil && opts.TimeRange != nil {
+		fromTS = opts.TimeRange.From
+		toTS = opts.TimeRange.To
+	}
+
+	start := s.keyBuilder.BuildByIDRangeStart(entityType, entityID, fromTS)
+	end := s.keyBuilder.BuildByIDRangeEnd(entityType, entityID, toTS)
+
+	// Collect timestamps from _by_id index
+	var timestamps []int64
+	scanFn := func(key []byte) bool {
+		_, _, ts := index.ParseByIDIndexKey(key)
+		timestamps = append(timestamps, ts)
+		// Apply limit during scan if set
+		if opts != nil && opts.Limit > 0 && len(timestamps) >= opts.Limit {
+			return false
+		}
+		return true
+	}
+
+	var err error
+	if opts != nil && opts.Reverse {
+		err = s.indexStore.ReverseScan(start, end, scanFn)
+	} else {
+		err = s.indexStore.Scan(start, end, scanFn)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan _by_id index: %w", err)
+	}
+
+	// Fetch entities
+	entities := make([]*entity.Entity, 0, len(timestamps))
+	for _, ts := range timestamps {
+		e, err := s.GetVersion(entityType, entityID, ts)
+		if err != nil {
+			if err == ErrNotFound {
+				continue // Version was deleted
+			}
+			return nil, err
+		}
+		entities = append(entities, e)
+	}
+
+	return entities, nil
+}
+
+// Delete removes a specific version of an entity and all its index entries.
 func (s *EntityStore) Delete(e *entity.Entity) error {
-	kvKey := fmt.Sprintf("%s:%s", e.Type, e.ID)
+	// Use versioned KV key
+	kvKey := buildVersionedKVKey(e.Type, e.ID, e.Timestamp)
 	if err := s.kv.Delete(kvKey); err != nil && err != ErrNotFound {
 		return fmt.Errorf("kv delete: %w", err)
 	}
 	return s.deleteIndexes(e)
 }
 
-// deleteIndexes removes all index entries for an entity.
+// DeleteEntity removes ALL versions of an entity.
+func (s *EntityStore) DeleteEntity(entityType, entityID string) error {
+	// Get all versions
+	versions, err := s.GetHistory(entityType, entityID, nil)
+	if err != nil {
+		return fmt.Errorf("get history: %w", err)
+	}
+
+	// Delete each version
+	for _, e := range versions {
+		if err := s.Delete(e); err != nil {
+			return fmt.Errorf("delete version: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// deleteIndexes removes all index entries for a specific entity version.
 func (s *EntityStore) deleteIndexes(e *entity.Entity) error {
 	// Delete the _all index entry
 	allKey := s.keyBuilder.BuildAllKey(e.Type, e.Timestamp, e.ID)
 	if err := s.indexStore.Delete(allKey); err != nil {
 		return fmt.Errorf("index delete _all: %w", err)
+	}
+
+	// Delete the _by_id index entry
+	byIDKey := s.keyBuilder.BuildByIDKey(e.Type, e.ID, e.Timestamp)
+	if err := s.indexStore.Delete(byIDKey); err != nil {
+		return fmt.Errorf("index delete _by_id: %w", err)
 	}
 
 	// Delete field index entries
@@ -160,6 +262,14 @@ func (s *EntityStore) deleteIndexes(e *entity.Entity) error {
 }
 
 const configHashKeyPrefix = "_meta:index_config:"
+
+// buildVersionedKVKey constructs a versioned KV key for entity storage.
+// Format: "{type}:{id}:{timestamp_hex}" e.g. "gamestate:game-123:800f3adc12345678"
+func buildVersionedKVKey(entityType, entityID string, timestamp int64) string {
+	// XOR with sign bit to make the timestamp sortable (same as encoding.EncodeTimestamp)
+	u := uint64(timestamp) ^ (1 << 63)
+	return fmt.Sprintf("%s:%s:%016x", entityType, entityID, u)
+}
 
 // syncIndexes checks index configurations and rebuilds indexes if configurations have changed.
 // This should be called after creating the EntityStore and before using it.
@@ -261,6 +371,12 @@ func (s *EntityStore) Reindex(entityType string) error {
 			return true // Continue on error
 		}
 
+		// Write the _by_id index entry
+		byIDKey := s.keyBuilder.BuildByIDKey(e.Type, e.ID, e.Timestamp)
+		if err := s.indexStore.Set(byIDKey, nil); err != nil {
+			return true // Continue on error
+		}
+
 		// Write field indexes based on current config
 		cfg := s.registry.Get(e.Type)
 		if cfg == nil {
@@ -287,39 +403,45 @@ func (s *EntityStore) Reindex(entityType string) error {
 	return nil
 }
 
-// DeleteExpiredBatch deletes up to limit expired entities (timestamps before cutoffNS).
-// Returns the number of entities deleted.
+// versionKey identifies a specific entity version.
+type versionKey struct {
+	EntityID  string
+	Timestamp int64
+}
+
+// DeleteExpiredBatch deletes up to limit expired entity versions (timestamps before cutoffNS).
+// Returns the number of versions deleted.
 func (s *EntityStore) DeleteExpiredBatch(entityType string, cutoffNS int64, limit int) (int, error) {
 	// Build range for _all index: from beginning of time to cutoff
 	startKey := s.keyBuilder.BuildAllRangeStart(entityType, 0)
 	endKey := s.keyBuilder.BuildAllRangeEnd(entityType, cutoffNS)
 
-	// Collect entity IDs to delete (up to limit)
-	var entityIDs []string
+	// Collect versions to delete (entity ID + timestamp pairs, up to limit)
+	var versions []versionKey
 	err := s.indexStore.Scan(startKey, endKey, func(key []byte) bool {
-		_, _, entityID := index.ParseAllIndexKey(key)
+		_, ts, entityID := index.ParseAllIndexKey(key)
 		if entityID != "" {
-			entityIDs = append(entityIDs, entityID)
+			versions = append(versions, versionKey{EntityID: entityID, Timestamp: ts})
 		}
-		return len(entityIDs) < limit
+		return len(versions) < limit
 	})
 	if err != nil {
-		return 0, fmt.Errorf("scan expired entities: %w", err)
+		return 0, fmt.Errorf("scan expired versions: %w", err)
 	}
 
-	// Delete each entity (this handles KV + all index cleanup)
+	// Delete each version (this handles KV + all index cleanup)
 	deleted := 0
-	for _, entityID := range entityIDs {
-		e, err := s.Get(entityType, entityID)
+	for _, v := range versions {
+		e, err := s.GetVersion(entityType, v.EntityID, v.Timestamp)
 		if err != nil {
 			if err == ErrNotFound {
 				continue // Already deleted
 			}
-			return deleted, fmt.Errorf("get entity %s/%s: %w", entityType, entityID, err)
+			return deleted, fmt.Errorf("get version %s/%s@%d: %w", entityType, v.EntityID, v.Timestamp, err)
 		}
 
 		if err := s.Delete(e); err != nil {
-			return deleted, fmt.Errorf("delete entity %s/%s: %w", entityType, entityID, err)
+			return deleted, fmt.Errorf("delete version %s/%s@%d: %w", entityType, v.EntityID, v.Timestamp, err)
 		}
 		deleted++
 	}

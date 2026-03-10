@@ -13,6 +13,9 @@ const Separator = '/'
 // AllFieldName is the synthetic field name for time-series queries across all entities.
 const AllFieldName = "_all"
 
+// ByIDFieldName is the synthetic field name for the _by_id index (entity versions).
+const ByIDFieldName = "_by_id"
+
 // KeyBuilder builds index keys following the schema:
 // {entity_type}/{field_name}/{field_value_bytes}/{timestamp_unix_ns}/{entity_id}
 type KeyBuilder struct {
@@ -134,6 +137,61 @@ func (kb *KeyBuilder) BuildAllRangeEnd(entityType string, toTimestamp int64) []b
 	return kb.copyBytes()
 }
 
+// BuildByIDKey constructs a _by_id index key for entity version lookups.
+// Format: {entity_type}/_by_id/{entity_id}/{timestamp_8_bytes}
+func (kb *KeyBuilder) BuildByIDKey(entityType, entityID string, timestamp int64) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(ByIDFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(entityID)
+	kb.buf.WriteByte(Separator)
+	kb.buf.Write(encoding.EncodeTimestamp(timestamp))
+	return kb.copyBytes()
+}
+
+// BuildByIDPrefix constructs a prefix for scanning all versions of an entity.
+// Format: {entity_type}/_by_id/{entity_id}/
+func (kb *KeyBuilder) BuildByIDPrefix(entityType, entityID string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(ByIDFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(entityID)
+	kb.buf.WriteByte(Separator)
+	return kb.copyBytes()
+}
+
+// BuildByIDRangeStart constructs a range start for time-bounded _by_id queries.
+func (kb *KeyBuilder) BuildByIDRangeStart(entityType, entityID string, fromTimestamp int64) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(ByIDFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(entityID)
+	kb.buf.WriteByte(Separator)
+	kb.buf.Write(encoding.EncodeTimestamp(fromTimestamp))
+	return kb.copyBytes()
+}
+
+// BuildByIDRangeEnd constructs a range end for time-bounded _by_id queries.
+func (kb *KeyBuilder) BuildByIDRangeEnd(entityType, entityID string, toTimestamp int64) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(ByIDFieldName)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(entityID)
+	kb.buf.WriteByte(Separator)
+	kb.buf.Write(encoding.EncodeTimestamp(toTimestamp))
+	// Use 0xFF to ensure we include all entries at this timestamp
+	kb.buf.WriteByte(0xFF)
+	return kb.copyBytes()
+}
+
 func (kb *KeyBuilder) copyBytes() []byte {
 	result := make([]byte, kb.buf.Len())
 	copy(result, kb.buf.Bytes())
@@ -204,5 +262,23 @@ func ParseAllIndexKey(key []byte) (entityType string, timestamp int64, entityID 
 		timestamp = encoding.DecodeTimestamp(parts[2])
 	}
 	entityID = string(parts[3])
+	return
+}
+
+// ParseByIDIndexKey extracts components from a _by_id index key.
+// Format: {entity_type}/_by_id/{entity_id}/{timestamp_8_bytes}
+// Returns entityType, entityID, timestamp.
+func ParseByIDIndexKey(key []byte) (entityType, entityID string, timestamp int64) {
+	parts := bytes.SplitN(key, []byte{Separator}, 4)
+	if len(parts) < 4 {
+		return
+	}
+
+	entityType = string(parts[0])
+	// parts[1] is "_by_id"
+	entityID = string(parts[2])
+	if len(parts[3]) == 8 {
+		timestamp = encoding.DecodeTimestamp(parts[3])
+	}
 	return
 }

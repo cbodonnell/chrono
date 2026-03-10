@@ -510,7 +510,7 @@ func TestCompoundQuery(t *testing.T) {
 	}
 }
 
-func TestWriteUpdatesIndexes(t *testing.T) {
+func TestWriteCreatesNewVersions(t *testing.T) {
 	s := setupTestStore(t)
 	defer s.Close(t.Context())
 
@@ -545,15 +545,35 @@ func TestWriteUpdatesIndexes(t *testing.T) {
 		t.Errorf("Expected 1 result for active=true, got %d", len(results))
 	}
 
-	// Update the entity with active=false (and new timestamp)
-	e.Timestamp = now + 1000
-	e.Fields["active"] = entity.NewBool(false)
-
-	if err := s.Write(e); err != nil {
-		t.Fatalf("Write update failed: %v", err)
+	// Write a new version with active=false (creates version, doesn't overwrite)
+	e2 := &entity.Entity{
+		ID:        "sensor-001",
+		Type:      "sensor",
+		Timestamp: now + 1000,
+		Fields: map[string]entity.Value{
+			"temp":   entity.NewFloat(72.5),
+			"active": entity.NewBool(false),
+		},
 	}
 
-	// Old index should be gone - query by active=true should return 0
+	if err := s.Write(e2); err != nil {
+		t.Fatalf("Write new version failed: %v", err)
+	}
+
+	// Both versions exist - query with IncludeHistory finds both
+	resultsHistory, err := s.Query(&store.Query{
+		EntityType:     "sensor",
+		IncludeHistory: true,
+	})
+	if err != nil {
+		t.Fatalf("Query with history failed: %v", err)
+	}
+	if len(resultsHistory) != 2 {
+		t.Errorf("Expected 2 versions in history, got %d", len(resultsHistory))
+	}
+
+	// Query by active=true finds the old version, but returns latest version of entity
+	// (deduplication returns latest version per entity ID)
 	results, err = s.Query(&store.Query{
 		EntityType: "sensor",
 		Filters: []store.FieldFilter{
@@ -563,11 +583,15 @@ func TestWriteUpdatesIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}
-	if len(results) != 0 {
-		t.Errorf("Expected 0 results for active=true after update, got %d", len(results))
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result when querying active=true, got %d", len(results))
+	}
+	// The result is the latest version (active=false) because we deduplicate by ID
+	if len(results) > 0 && results[0].Fields["active"].B != false {
+		t.Errorf("Expected latest version with active=false, got active=%v", results[0].Fields["active"].B)
 	}
 
-	// New index should exist - query by active=false should return 1
+	// Query by active=false should return 1 (latest version matches)
 	results, err = s.Query(&store.Query{
 		EntityType: "sensor",
 		Filters: []store.FieldFilter{
@@ -578,19 +602,19 @@ func TestWriteUpdatesIndexes(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 	if len(results) != 1 {
-		t.Errorf("Expected 1 result for active=false after update, got %d", len(results))
+		t.Errorf("Expected 1 result for active=false, got %d", len(results))
 	}
 
-	// Verify Get returns the updated entity
+	// Verify Get returns the latest version
 	got, err := s.Get("sensor", "sensor-001")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
 	if got.Fields["active"].B != false {
-		t.Errorf("Expected active=false, got %v", got.Fields["active"].B)
+		t.Errorf("Expected active=false (latest), got %v", got.Fields["active"].B)
 	}
 	if got.Timestamp != now+1000 {
-		t.Errorf("Expected updated timestamp, got %d", got.Timestamp)
+		t.Errorf("Expected latest timestamp %d, got %d", now+1000, got.Timestamp)
 	}
 }
 
