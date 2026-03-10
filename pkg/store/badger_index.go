@@ -41,7 +41,7 @@ func (s *BadgerIndexStore) Scan(start, end []byte, fn func(key []byte) bool) err
 		defer it.Close()
 
 		for it.Seek(start); it.Valid(); it.Next() {
-			key := it.Item().Key()
+			key := it.Item().KeyCopy(nil)
 			if bytes.Compare(key, end) >= 0 {
 				break
 			}
@@ -65,7 +65,7 @@ func (s *BadgerIndexStore) ReverseScan(start, end []byte, fn func(key []byte) bo
 		// In reverse mode, seek positions at or before the seek key.
 		// We want keys < end, so seek to end and skip if we land exactly on it.
 		for it.Seek(end); it.Valid(); it.Next() {
-			key := it.Item().Key()
+			key := it.Item().KeyCopy(nil)
 			// Skip the end key itself (exclusive upper bound)
 			if bytes.Compare(key, end) >= 0 {
 				continue
@@ -92,7 +92,7 @@ func (s *BadgerIndexStore) ScanPrefix(prefix []byte, fn func(key []byte) bool) e
 		defer it.Close()
 
 		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			if !fn(it.Item().Key()) {
+			if !fn(it.Item().KeyCopy(nil)) {
 				break
 			}
 		}

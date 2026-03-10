@@ -198,6 +198,63 @@ func (kb *KeyBuilder) copyBytes() []byte {
 	return result
 }
 
+// BuildComparisonRangeStart constructs a range start key for comparison queries (lt, lte, gt, gte).
+// For lt/lte: starts at the beginning of the field's value space.
+// For gt/gte: starts at or after the specified value.
+func (kb *KeyBuilder) BuildComparisonRangeStart(entityType, fieldName string, value entity.Value, op string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+
+	switch op {
+	case "lt", "lte":
+		// Start at beginning of field values (no value prefix needed)
+		// The scan will include all values from the start
+	case "gt":
+		// Start after the specified value (value + separator + 0xFF to skip past all entries with this value)
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+		kb.buf.WriteByte(0xFF)
+	case "gte":
+		// Start at the specified value (inclusive)
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+	}
+
+	return kb.copyBytes()
+}
+
+// BuildComparisonRangeEnd constructs a range end key for comparison queries (lt, lte, gt, gte).
+// For lt: ends before the specified value.
+// For lte: ends after all entries with the specified value.
+// For gt/gte: ends at the end of the field's value space.
+func (kb *KeyBuilder) BuildComparisonRangeEnd(entityType, fieldName string, value entity.Value, op string) []byte {
+	kb.Reset()
+	kb.buf.WriteString(entityType)
+	kb.buf.WriteByte(Separator)
+	kb.buf.WriteString(fieldName)
+	kb.buf.WriteByte(Separator)
+
+	switch op {
+	case "lt":
+		// End before the specified value (exclusive)
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+	case "lte":
+		// End after all entries with this value (inclusive)
+		kb.buf.Write(EncodeValue(value))
+		kb.buf.WriteByte(Separator)
+		kb.buf.WriteByte(0xFF)
+	case "gt", "gte":
+		// End at the end of the field's value space
+		kb.buf.WriteByte(0xFF)
+	}
+
+	return kb.copyBytes()
+}
+
 // EncodeValue encodes a Value to bytes for use in index keys.
 func EncodeValue(v entity.Value) []byte {
 	switch v.Kind {

@@ -7,6 +7,7 @@ A lightweight schema-free entity database with configurable field-level indexes,
 - **Schema-free entities** — Store any entity type with dynamic fields
 - **Configurable indexes** — Define which fields are indexed per entity type via YAML config
 - **Time-series queries** — Efficient range scans with timestamps embedded in index keys
+- **Entity versioning** — Append-only writes preserve full history; retrieve any version by timestamp
 - **O(1) entity retrieval** — Full entities stored in key-value store
 - **Persistent storage** — BadgerDB-backed for durability
 - **HTTP API** — Simple REST interface for all operations
@@ -178,6 +179,23 @@ POST /entities
 GET /entities/{type}/{id}
 ```
 
+Returns the latest version of the entity.
+
+### Get Entity History
+
+```
+GET /entities/{type}/{id}/history?from=<timestamp>&to=<timestamp>&limit=<n>&reverse=true
+```
+
+Returns all versions of an entity. Each write creates a new version with its own timestamp.
+
+| Parameter | Description |
+|-----------|-------------|
+| `from` | Start of time range (Unix nanoseconds, inclusive) |
+| `to` | End of time range (Unix nanoseconds, inclusive) |
+| `limit` | Maximum number of versions to return |
+| `reverse` | If `true`, return newest versions first |
+
 ### Delete Entity
 
 ```
@@ -241,11 +259,13 @@ Multiple filters use AND semantics.
 
 ### KV Store
 
-Full entities are stored as serialized JSON blobs with O(1) access:
+Full entities are stored as serialized blobs. Each version is stored separately, keyed by timestamp:
 
 ```
-{entity_type}:{entity_id} → serialized entity blob
+{entity_type}:{entity_id}:{timestamp_hex} → serialized entity blob
 ```
+
+This append-only design preserves full history and enables efficient version lookups.
 
 ### Index Store
 
@@ -255,10 +275,11 @@ Index keys encode field values and timestamps for efficient range scans:
 {entity_type}/{field_name}/{encoded_value}/{timestamp_ns}/{entity_id} → (empty)
 ```
 
-A synthetic `_all` index enables pure time-series queries:
+Synthetic indexes enable efficient access patterns:
 
 ```
-{entity_type}/_all/{timestamp_ns}/{entity_id} → (empty)
+{entity_type}/_all/{timestamp_ns}/{entity_id} → (empty)      # time-series queries
+{entity_type}/_by_id/{entity_id}/{timestamp_ns} → (empty)    # version history
 ```
 
 ### Value Encoding

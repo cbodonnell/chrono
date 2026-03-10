@@ -161,23 +161,17 @@ func (s *EntityStore) scanFilter(entityType string, filter FieldFilter, timeRang
 		}
 
 	case OpLt, OpLte, OpGt, OpGte:
-		// Range queries: scan the entire field prefix and filter
-		prefix := kb.BuildPrefix(entityType, filter.Field)
-		targetEncoded := index.EncodeValue(filter.Value)
+		// Range queries: use bounded scan based on operator
+		opStr := opToString(filter.Op)
+		start := kb.BuildComparisonRangeStart(entityType, filter.Field, filter.Value, opStr)
+		end := kb.BuildComparisonRangeEnd(entityType, filter.Field, filter.Value, opStr)
 
-		err := s.indexStore.ScanPrefix(prefix, func(key []byte) bool {
-			// Extract the value portion for comparison
-			valueStart := len(prefix)
-			// Find the next separator after the value
-			valuePart, ts, id := extractValueAndParse(key[valueStart:])
-
+		err := s.indexStore.Scan(start, end, func(key []byte) bool {
+			_, _, ts, id := index.ParseIndexKey(key)
 			if !timeInRange(ts, fromTS, toTS) {
 				return true // Continue scanning
 			}
-
-			if compareOp(valuePart, targetEncoded, filter.Op) {
-				keys[entityKey{Timestamp: ts, ID: id}] = struct{}{}
-			}
+			keys[entityKey{Timestamp: ts, ID: id}] = struct{}{}
 			return true
 		})
 		if err != nil {
@@ -188,88 +182,23 @@ func (s *EntityStore) scanFilter(entityType string, filter FieldFilter, timeRang
 	return keys, nil
 }
 
-// extractValueAndParse extracts value bytes and parses timestamp/ID from remainder.
-func extractValueAndParse(data []byte) (value []byte, timestamp int64, entityID string) {
-	// Find separators to extract components
-	// Format: {value}/{timestamp}/{id}
-	sep := byte(index.Separator)
-
-	firstSep := -1
-	secondSep := -1
-	for i, b := range data {
-		if b == sep {
-			if firstSep == -1 {
-				firstSep = i
-			} else {
-				secondSep = i
-				break
-			}
-		}
-	}
-
-	if firstSep == -1 {
-		return data, 0, ""
-	}
-
-	value = data[:firstSep]
-
-	if secondSep == -1 || secondSep-firstSep-1 != 8 {
-		return value, 0, ""
-	}
-
-	tsBytes := data[firstSep+1 : secondSep]
-	timestamp = decodeTimestamp(tsBytes)
-	entityID = string(data[secondSep+1:])
-
-	return value, timestamp, entityID
-}
-
-func decodeTimestamp(b []byte) int64 {
-	if len(b) != 8 {
-		return 0
-	}
-	u := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-		uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-	return int64(u ^ (1 << 63))
-}
-
 func timeInRange(ts, from, to int64) bool {
 	return ts >= from && ts <= to
 }
 
-func compareOp(actual, target []byte, op Op) bool {
-	cmp := compareBytes(actual, target)
+func opToString(op Op) string {
 	switch op {
 	case OpLt:
-		return cmp < 0
+		return "lt"
 	case OpLte:
-		return cmp <= 0
+		return "lte"
 	case OpGt:
-		return cmp > 0
+		return "gt"
 	case OpGte:
-		return cmp >= 0
+		return "gte"
 	default:
-		return false
+		return ""
 	}
-}
-
-func compareBytes(a, b []byte) int {
-	minLen := min(len(a), len(b))
-	for i := 0; i < minLen; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
 }
 
 // intersect returns the intersection of two entity key sets.
