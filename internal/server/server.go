@@ -173,6 +173,13 @@ func (s *Server) deleteEntity(w http.ResponseWriter, entityType, entityID string
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HistoryResponse is the paginated response for entity history.
+type HistoryResponse struct {
+	Items      []EntityResponse `json:"items"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+	HasMore    bool             `json:"has_more"`
+}
+
 // getEntityHistory handles GET /entities/{type}/{id}/history.
 func (s *Server) getEntityHistory(w http.ResponseWriter, r *http.Request, entityType, entityID string) {
 	opts := &store.HistoryOptions{}
@@ -204,14 +211,42 @@ func (s *Server) getEntityHistory(w http.ResponseWriter, r *http.Request, entity
 		opts.TimeRange.To = to
 	}
 
+	// Handle cursor-based pagination
+	if cursorStr := query.Get("cursor"); cursorStr != "" {
+		cursor, err := strconv.ParseInt(cursorStr, 10, 64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid 'cursor' parameter: %v", err), http.StatusBadRequest)
+			return
+		}
+		if opts.TimeRange == nil {
+			opts.TimeRange = &store.TimeRange{}
+		}
+		// Cursor represents the last timestamp seen
+		// For forward order: start after the cursor
+		// For reverse order: end before the cursor
+		if query.Get("reverse") == "true" {
+			opts.TimeRange.To = cursor - 1
+		} else {
+			opts.TimeRange.From = cursor + 1
+		}
+	}
+
+	// Default limit for pagination if not specified
+	requestedLimit := 0
 	if limitStr := query.Get("limit"); limitStr != "" {
 		limit, err := strconv.Atoi(limitStr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid 'limit' parameter: %v", err), http.StatusBadRequest)
 			return
 		}
-		opts.Limit = limit
+		requestedLimit = limit
+	} else {
+		// Default limit when not specified
+		requestedLimit = 100
 	}
+
+	// Request one extra to determine if there are more results
+	opts.Limit = requestedLimit + 1
 
 	if reverseStr := query.Get("reverse"); reverseStr == "true" {
 		opts.Reverse = true
@@ -223,9 +258,28 @@ func (s *Server) getEntityHistory(w http.ResponseWriter, r *http.Request, entity
 		return
 	}
 
-	resp := make([]EntityResponse, len(history))
+	// Determine if there are more results
+	hasMore := len(history) > requestedLimit
+	if hasMore {
+		history = history[:requestedLimit]
+	}
+
+	items := make([]EntityResponse, len(history))
 	for i, e := range history {
-		resp[i] = EntityResponse{}.FromEntity(e)
+		items[i] = EntityResponse{}.FromEntity(e)
+	}
+
+	// Build next cursor from the last item's timestamp
+	var nextCursor string
+	if hasMore && len(history) > 0 {
+		lastItem := history[len(history)-1]
+		nextCursor = strconv.FormatInt(lastItem.Timestamp, 10)
+	}
+
+	resp := HistoryResponse{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -397,10 +451,12 @@ func fromValue(v entity.Value) interface{} {
 
 // QueryRequest is the JSON representation of a query.
 type QueryRequest struct {
-	EntityType string         `json:"entity_type"`
-	Filters    []FilterSpec   `json:"filters,omitempty"`
-	TimeRange  *TimeRangeSpec `json:"time_range,omitempty"`
-	Limit      int            `json:"limit,omitempty"`
+	EntityType     string         `json:"entity_type"`
+	Filters        []FilterSpec   `json:"filters,omitempty"`
+	TimeRange      *TimeRangeSpec `json:"time_range,omitempty"`
+	Limit          int            `json:"limit,omitempty"`
+	Reverse        bool           `json:"reverse,omitempty"`
+	IncludeHistory bool           `json:"include_history,omitempty"`
 }
 
 // FilterSpec is a single filter in a query.
@@ -448,10 +504,12 @@ func (r *QueryRequest) ToQuery() (*store.Query, error) {
 	}
 
 	return &store.Query{
-		EntityType: r.EntityType,
-		Filters:    filters,
-		TimeRange:  timeRange,
-		Limit:      r.Limit,
+		EntityType:     r.EntityType,
+		Filters:        filters,
+		TimeRange:      timeRange,
+		Limit:          r.Limit,
+		Reverse:        r.Reverse,
+		IncludeHistory: r.IncludeHistory,
 	}, nil
 }
 
