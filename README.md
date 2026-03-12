@@ -395,6 +395,15 @@ es.Write(&entity.Entity{...})
 results, _ := es.Query(&store.Query{...})
 ```
 
+## Future Work
+
+- Partitioning by time for large datasets
+- Composite field indexes and bitmap indexes for high-cardinality fields
+- Temporal validity (_start and _end instead of a single timestamp)
+  - _start = _end for point-in-time entities
+  - _start < _end for entities with a known time range
+  - _end = ∞ for entities with open-ended validity (e.g. user sessions)
+
 ## License
 
 MIT
