@@ -241,6 +241,7 @@ func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptio
 
 // DeleteVersion removes a specific version of an entity and all its index entries.
 // If deleting the latest version, updates _latest indexes to the new latest.
+// TODO: improve error handling in this function
 func (s *EntityStore) DeleteVersion(e *entity.Entity) error {
 	// Check if this is the latest version
 	latest, err := s.Get(e.Type, e.ID)
@@ -276,6 +277,7 @@ func (s *EntityStore) DeleteVersion(e *entity.Entity) error {
 }
 
 // DeleteEntity removes ALL versions of an entity.
+// TODO: improve error handling in this function
 func (s *EntityStore) DeleteEntity(entityType, entityID string) error {
 	// Get latest version to clean up _latest indexes
 	latest, _ := s.Get(entityType, entityID)

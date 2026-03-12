@@ -418,5 +418,3 @@ func opToString(op Op) string {
 		return ""
 	}
 }
-
-
