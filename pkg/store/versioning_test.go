@@ -249,7 +249,7 @@ func TestDeleteVersion(t *testing.T) {
 		t.Fatalf("GetVersion failed: %v", err)
 	}
 
-	if err := s.Delete(middleVersion); err != nil {
+	if err := s.DeleteVersion(middleVersion); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 

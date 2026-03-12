@@ -51,8 +51,9 @@ type FieldIndex struct {
 
 // EntityTypeConfig holds the index configuration for an entity type.
 type EntityTypeConfig struct {
-	Indexes []FieldIndex
-	TTL     time.Duration // 0 means no TTL
+	Indexes   []FieldIndex
+	TTL       time.Duration // 0 means no TTL
+	NoReindex bool          // If true, skip automatic reindexing on config changes
 }
 
 // Registry holds index configurations for all entity types.

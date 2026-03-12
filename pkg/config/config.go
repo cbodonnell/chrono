@@ -12,9 +12,9 @@ import (
 
 // Config is the top-level server configuration.
 type Config struct {
-	Server  ServerConfig              `yaml:"server"`
-	Storage StorageConfig             `yaml:"storage"`
-	Entities map[string]EntityConfig  `yaml:"entities"`
+	Server   ServerConfig            `yaml:"server"`
+	Storage  StorageConfig           `yaml:"storage"`
+	Entities map[string]EntityConfig `yaml:"entities"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -29,7 +29,8 @@ type StorageConfig struct {
 
 // EntityConfig defines an entity type and its indexes.
 type EntityConfig struct {
-	Retention string        `yaml:"retention"` // e.g., "168h", "720h" - empty means keep forever
+	Retention string        `yaml:"retention"`  // e.g., "168h", "720h" - empty means keep forever
+	NoReindex bool          `yaml:"no_reindex"` // If true, skip automatic reindexing on config changes
 	Indexes   []IndexConfig `yaml:"indexes"`
 }
 
@@ -94,8 +95,9 @@ func (c *Config) BuildRegistry() (*index.Registry, error) {
 		}
 
 		registry.Register(entityType, &index.EntityTypeConfig{
-			Indexes: indexes,
-			TTL:     ttl,
+			Indexes:   indexes,
+			TTL:       ttl,
+			NoReindex: entityCfg.NoReindex,
 		})
 	}
 

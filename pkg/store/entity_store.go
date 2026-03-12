@@ -50,14 +50,19 @@ func NewEntityStore(kv KVStore, indexStore IndexStore, registry *index.Registry,
 }
 
 // Write stores an entity version and updates all configured indexes.
-// Each write creates a new version - no overwrites occur.
 func (s *EntityStore) Write(e *entity.Entity) error {
 	// Check if there's an existing latest version and remove its _latest indexes
+	isNewLatest := false
 	existingLatest, err := s.Get(e.Type, e.ID)
-	if err != nil && err != ErrNotFound {
-		return fmt.Errorf("check existing: %w", err)
+	switch {
+	case err == ErrNotFound:
+		isNewLatest = true // No existing version, so this will be the latest
+	case err != nil:
+		return fmt.Errorf("check existing latest version: %w", err)
+	default:
+		isNewLatest = e.Timestamp > existingLatest.Timestamp
 	}
-	if existingLatest != nil {
+	if isNewLatest && existingLatest != nil {
 		if err := s.deleteLatestIndexes(existingLatest); err != nil {
 			return fmt.Errorf("delete old latest indexes: %w", err)
 		}
@@ -87,10 +92,12 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 		return fmt.Errorf("index set _by_id: %w", err)
 	}
 
-	// Write the _latest_all index entry
-	latestAllKey := s.keyBuilder.BuildLatestAllKey(e.Type, e.ID)
-	if err := s.indexStore.Set(latestAllKey, nil); err != nil {
-		return fmt.Errorf("index set _latest_all: %w", err)
+	if isNewLatest {
+		// Write the _latest_all index entry
+		latestAllKey := s.keyBuilder.BuildLatestAllKey(e.Type, e.ID)
+		if err := s.indexStore.Set(latestAllKey, nil); err != nil {
+			return fmt.Errorf("index set _latest_all: %w", err)
+		}
 	}
 
 	// Look up index config for this entity type
@@ -112,6 +119,10 @@ func (s *EntityStore) Write(e *entity.Entity) error {
 			if err := s.indexStore.Set(key, nil); err != nil {
 				return fmt.Errorf("index set %s: %w", idxField.Name, err)
 			}
+		}
+
+		if !isNewLatest {
+			continue // Don't write _latest indexes if this isn't the new latest version
 		}
 
 		// Latest-only index keys
@@ -175,10 +186,14 @@ type HistoryOptions struct {
 
 // GetHistory retrieves all versions of an entity.
 func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptions) ([]*entity.Entity, error) {
+	if opts == nil {
+		opts = &HistoryOptions{}
+	}
+
 	var fromTS int64 = 0
 	var toTS int64 = math.MaxInt64
 
-	if opts != nil && opts.TimeRange != nil {
+	if opts.TimeRange != nil {
 		fromTS = opts.TimeRange.From
 		toTS = opts.TimeRange.To
 	}
@@ -192,7 +207,7 @@ func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptio
 		_, _, ts := index.ParseByIDIndexKey(key)
 		timestamps = append(timestamps, ts)
 		// Apply limit during scan if set
-		if opts != nil && opts.Limit > 0 && len(timestamps) >= opts.Limit {
+		if opts.Limit > 0 && len(timestamps) >= opts.Limit {
 			return false
 		}
 		return true
@@ -224,9 +239,9 @@ func (s *EntityStore) GetHistory(entityType, entityID string, opts *HistoryOptio
 	return entities, nil
 }
 
-// Delete removes a specific version of an entity and all its index entries.
+// DeleteVersion removes a specific version of an entity and all its index entries.
 // If deleting the latest version, updates _latest indexes to the new latest.
-func (s *EntityStore) Delete(e *entity.Entity) error {
+func (s *EntityStore) DeleteVersion(e *entity.Entity) error {
 	// Check if this is the latest version
 	latest, err := s.Get(e.Type, e.ID)
 	isLatest := err == nil && latest != nil && latest.Timestamp == e.Timestamp
@@ -402,12 +417,16 @@ func buildVersionedKVKey(entityType, entityID string, timestamp int64) string {
 }
 
 // syncIndexes checks index configurations and rebuilds indexes if configurations have changed.
-// This should be called after creating the EntityStore and before using it.
 // Returns an error if reindexing fails.
 func (s *EntityStore) syncIndexes() error {
 	for _, entityType := range s.registry.EntityTypes() {
 		cfg := s.registry.Get(entityType)
 		if cfg == nil {
+			continue
+		}
+
+		if cfg.NoReindex {
+			log.Printf("skipping index sync for %s due to NoReindex flag", entityType)
 			continue
 		}
 
@@ -418,12 +437,14 @@ func (s *EntityStore) syncIndexes() error {
 		}
 
 		if currentHash != storedHash {
+			log.Printf("index config changed for %s, rebuilding indexes...", entityType)
 			if err := s.Reindex(entityType); err != nil {
 				return fmt.Errorf("reindex %s: %w", entityType, err)
 			}
 			if err := s.storeConfigHash(entityType, currentHash); err != nil {
 				return fmt.Errorf("store config hash for %s: %w", entityType, err)
 			}
+			log.Printf("indexes rebuilt for %s", entityType)
 		}
 	}
 	return nil
@@ -599,7 +620,7 @@ func (s *EntityStore) DeleteExpiredBatch(entityType string, cutoffNS int64, limi
 			return deleted, fmt.Errorf("get version %s/%s@%d: %w", entityType, v.EntityID, v.Timestamp, err)
 		}
 
-		if err := s.Delete(e); err != nil {
+		if err := s.DeleteVersion(e); err != nil {
 			return deleted, fmt.Errorf("delete version %s/%s@%d: %w", entityType, v.EntityID, v.Timestamp, err)
 		}
 		deleted++

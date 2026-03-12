@@ -220,7 +220,7 @@ func TestDeleteNestedFieldIndex(t *testing.T) {
 	}
 
 	// Delete the entity
-	if err := s.Delete(device); err != nil {
+	if err := s.DeleteVersion(device); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
@@ -650,7 +650,7 @@ func TestDelete(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	if err := s.Delete(e); err != nil {
+	if err := s.DeleteVersion(e); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
