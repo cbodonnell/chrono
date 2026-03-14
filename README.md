@@ -14,7 +14,7 @@ A lightweight schema-free entity database with configurable field-level indexes,
 ## Installation
 
 ```bash
-go install github.com/cbodonnell/chrono/cmd/server@latest
+go install github.com/cbodonnell/chrono/cmd/chrono@latest
 ```
 
 Or build from source:
@@ -22,7 +22,7 @@ Or build from source:
 ```bash
 git clone https://github.com/cbodonnell/chrono.git
 cd chrono
-go build -o chrono ./cmd/server
+go build -o chrono ./cmd/chrono
 ```
 
 ## Quick Start
