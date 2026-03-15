@@ -287,10 +287,21 @@ func combineResultSets[K comparable](resultSets []map[K]struct{}, matchAny bool)
 }
 
 // fetchLatestEntities fetches the latest version of each entity.
+// When timeRange.To is specified, returns the latest version as of that time (point-in-time query).
 func (s *EntityStore) fetchLatestEntities(entityType string, entityIDs []string, timeRange *TimeRange, limit int, reverse bool) ([]*entity.Entity, error) {
 	entities := make([]*entity.Entity, 0, len(entityIDs))
 	for _, id := range entityIDs {
-		e, err := s.Get(entityType, id)
+		var e *entity.Entity
+		var err error
+
+		if timeRange != nil && timeRange.To > 0 {
+			// Point-in-time query: get latest version as of timeRange.To
+			e, err = s.GetAt(entityType, id, timeRange.To)
+		} else {
+			// No time constraint: get absolute latest
+			e, err = s.Get(entityType, id)
+		}
+
 		if err != nil {
 			if err == ErrNotFound {
 				continue
@@ -298,11 +309,9 @@ func (s *EntityStore) fetchLatestEntities(entityType string, entityIDs []string,
 			return nil, err
 		}
 
-		// Filter by time range if specified
-		if timeRange != nil {
-			if e.Timestamp < timeRange.From || e.Timestamp > timeRange.To {
-				continue
-			}
+		// Filter by timeRange.From if specified
+		if timeRange != nil && timeRange.From > 0 && e.Timestamp < timeRange.From {
+			continue
 		}
 
 		entities = append(entities, e)

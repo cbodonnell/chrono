@@ -1,0 +1,14 @@
+storage:
+  data_dir: "./data"
+
+entities:
+  mass:
+    indexes:
+      - name: kind
+        type: string
+      - name: alive
+        type: bool
+  event:
+    indexes:
+      - name: event_type
+        type: string

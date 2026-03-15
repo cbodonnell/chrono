@@ -177,6 +177,30 @@ func (s *EntityStore) GetVersion(entityType, entityID string, timestamp int64) (
 	return &e, nil
 }
 
+// GetAt retrieves the latest version of an entity as of a specific point in time.
+// Returns the most recent version where timestamp <= asOfTime.
+func (s *EntityStore) GetAt(entityType, entityID string, asOfTime int64) (*entity.Entity, error) {
+	// Build range for reverse scan of _by_id index, bounded by asOfTime
+	start := s.keyBuilder.BuildByIDRangeStart(entityType, entityID, 0)
+	end := s.keyBuilder.BuildByIDRangeEnd(entityType, entityID, asOfTime)
+
+	var latestTimestamp int64 = -1
+	err := s.indexStore.ReverseScan(start, end, func(key []byte) bool {
+		_, _, ts := index.ParseByIDIndexKey(key)
+		latestTimestamp = ts
+		return false // Stop after first result (newest <= asOfTime)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan _by_id index: %w", err)
+	}
+
+	if latestTimestamp < 0 {
+		return nil, ErrNotFound
+	}
+
+	return s.GetVersion(entityType, entityID, latestTimestamp)
+}
+
 // HistoryOptions configures a GetHistory query.
 type HistoryOptions struct {
 	TimeRange *TimeRange
