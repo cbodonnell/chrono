@@ -104,25 +104,32 @@ func (g *Grid) Draw(term *renderer.Terminal, masses []*entity.Entity) {
 		}
 		occupied[cellKey] = true
 
-		// Get character and color based on kind
-		ch, clr := g.getMassAppearance(kind)
+		// Get mass value for coloring
+		massVal := mass.Fields["mass"].F
+
+		// Get character and color based on kind and mass
+		ch, clr := g.getMassAppearance(kind, massVal)
 
 		// Draw the mass
 		term.SetCharWithColor(gridX, gridY, ch, clr)
 	}
 }
 
-func (g *Grid) getMassAppearance(kind string) (rune, color.RGBA) {
+func (g *Grid) getMassAppearance(kind string, mass float64) (rune, color.RGBA) {
+	// Color based on mass (log scale gradient)
+	clr := colors.MassColor(mass)
+
+	// Character based on kind
 	switch kind {
 	case kindStar:
-		return '\u2606', colors.Yellow // ☆ (white star)
+		return '\u2606', clr // ☆ (white star)
 	case kindPlanet:
-		return '\u25CB', colors.White // ○ (white circle)
+		return '\u25CB', clr // ○ (white circle)
 	case kindAsteroid:
-		return '\u00B7', colors.Muted // · (middle dot)
+		return '\u00B7', clr // · (middle dot)
 	case kindDebris:
-		return '\u00D7', colors.Danger // × (multiplication sign)
+		return '\u00D7', clr // × (multiplication sign)
 	default:
-		return '?', colors.White
+		return '?', clr
 	}
 }
