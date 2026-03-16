@@ -12,12 +12,14 @@ import (
 // Universe coordinate space (0-100)
 const universeSize = 100.0
 
-// Mass kind constants
+// Mass kind constants (derived from mass + composition)
 const (
-	kindStar     = "star"
-	kindPlanet   = "planet"
-	kindAsteroid = "asteroid"
-	kindDebris   = "debris"
+	kindStar     = "star"     // Gas, mass >= 500 (fusion)
+	kindGiant    = "giant"    // Gas, mass 50-500 (gas giant)
+	kindCloud    = "cloud"    // Gas, mass < 50 (gas remnant)
+	kindPlanet   = "planet"   // Rock, mass >= 50 (spherical)
+	kindAsteroid = "asteroid" // Rock, mass 3-50 (irregular)
+	kindDebris   = "debris"   // Rock, mass < 3 (fragments)
 )
 
 // Grid renders the universe visualization
@@ -41,12 +43,16 @@ func kindPriority(kind string) int {
 	switch kind {
 	case kindDebris:
 		return 0
-	case kindAsteroid:
+	case kindCloud:
 		return 1
-	case kindPlanet:
+	case kindAsteroid:
 		return 2
-	case kindStar:
+	case kindPlanet:
 		return 3
+	case kindGiant:
+		return 4
+	case kindStar:
+		return 5
 	default:
 		return 0
 	}
@@ -120,15 +126,21 @@ func (g *Grid) getMassAppearance(kind string, mass float64) (rune, color.RGBA) {
 	clr := colors.MassColor(mass)
 
 	// Character based on kind
+	// Gas bodies: radiating/star-like shapes
+	// Rock bodies: solid geometric shapes
 	switch kind {
 	case kindStar:
-		return '\u2606', clr // ☆ (white star)
+		return '\u2605', clr // ★ (filled star - fusion!)
+	case kindGiant:
+		return '\u2726', clr // ✦ (4-pointed star - gas giant)
+	case kindCloud:
+		return '*', clr // * (asterisk - gas cloud)
 	case kindPlanet:
-		return '\u25CB', clr // ○ (white circle)
+		return '\u25C9', clr // ◉ (fisheye - rocky planet)
 	case kindAsteroid:
-		return '\u00B7', clr // · (middle dot)
+		return '\u2022', clr // • (bullet - asteroid, smaller than ●)
 	case kindDebris:
-		return '\u00D7', clr // × (multiplication sign)
+		return '\u00B7', clr // · (middle dot - debris)
 	default:
 		return '?', clr
 	}

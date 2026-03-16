@@ -66,7 +66,7 @@ func NewScreen(es *store.EntityStore) *Screen {
 		stepIndex:   0, // Default to 1 minute steps
 		footer:      components.NewFooter(0, renderer.Rows-1, renderer.Cols),
 		progressBar: components.NewProgressBar(3, renderer.Rows-4, renderer.Cols-6),
-		grid:        NewGrid(3, 3, 58, 20),
+		grid:        NewGrid(3, 3, 58, 19),
 	}
 
 	s.footer.
@@ -322,24 +322,35 @@ func (s *Screen) getEventAppearance(eventType string) (rune, color.RGBA) {
 }
 
 func (s *Screen) drawLegend(term *renderer.Terminal) {
-	// Draw legend below the universe grid
+	// Draw legend below the universe grid (two rows for 6 kinds)
+	// All gray since actual colors are mass-based
 	legendY := s.grid.Y + s.grid.Height + 1
 
-	// ☆ Star  ○ Planet  · Asteroid  × Debris
+	// Row 1: Gas bodies (radiating shapes) - ★ Star  ✦ Giant  * Cloud
 	x := s.grid.X
-	term.SetCharWithColor(x, legendY, '\u2606', colors.Yellow) // ☆
+	term.SetCharWithColor(x, legendY, '\u2605', colors.Muted) // ★
 	term.Print(x+2, legendY, "Star", colors.Muted)
 
+	x += 7
+	term.SetCharWithColor(x, legendY, '\u2726', colors.Muted) // ✦
+	term.Print(x+2, legendY, "Giant", colors.Muted)
+
 	x += 8
-	term.SetCharWithColor(x, legendY, '\u25CB', colors.White) // ○
+	term.SetCharWithColor(x, legendY, '*', colors.Muted) // *
+	term.Print(x+2, legendY, "Cloud", colors.Muted)
+
+	// Row 2: Rock bodies (solid shapes) - ◉ Planet  • Asteroid  · Debris
+	legendY++
+	x = s.grid.X
+	term.SetCharWithColor(x, legendY, '\u25C9', colors.Muted) // ◉
 	term.Print(x+2, legendY, "Planet", colors.Muted)
 
 	x += 9
-	term.SetCharWithColor(x, legendY, '\u00B7', colors.Muted) // ·
+	term.SetCharWithColor(x, legendY, '\u2022', colors.Muted) // •
 	term.Print(x+2, legendY, "Asteroid", colors.Muted)
 
 	x += 11
-	term.SetCharWithColor(x, legendY, '\u00D7', colors.Danger) // ×
+	term.SetCharWithColor(x, legendY, '\u00B7', colors.Muted) // ·
 	term.Print(x+2, legendY, "Debris", colors.Muted)
 }
 
@@ -372,12 +383,16 @@ func (s *Screen) drawTimeInfo(term *renderer.Terminal) {
 
 	// Stats line - breakdown by type
 	statsY := renderer.Rows - 3
-	var stars, planets, asteroids, debris int
+	var stars, giants, clouds, planets, asteroids, debris int
 	for _, m := range s.masses {
 		if m.Fields["alive"].B {
 			switch m.Fields["kind"].S {
 			case "star":
 				stars++
+			case "giant":
+				giants++
+			case "cloud":
+				clouds++
 			case "planet":
 				planets++
 			case "asteroid":
@@ -388,21 +403,32 @@ func (s *Screen) drawTimeInfo(term *renderer.Terminal) {
 		}
 	}
 
-	// Draw stats with icons: ☆3  ○15  ·22  ×2
+	// Draw stats with icons: ★2 ✦1 *0 ●4 ◆12 ·3
 	x := 3
-	term.SetCharWithColor(x, statsY, '\u2606', colors.Yellow)
+
+	// Gas bodies (radiating shapes)
+	term.SetCharWithColor(x, statsY, '\u2605', colors.MassExtreme) // ★
 	term.Print(x+1, statsY, fmt.Sprintf("%d", stars), colors.Muted)
-
 	x += 4
-	term.SetCharWithColor(x, statsY, '\u25CB', colors.White)
+
+	term.SetCharWithColor(x, statsY, '\u2726', colors.MassVeryHigh) // ✦
+	term.Print(x+1, statsY, fmt.Sprintf("%d", giants), colors.Muted)
+	x += 4
+
+	term.SetCharWithColor(x, statsY, '*', colors.MassMedium) // *
+	term.Print(x+1, statsY, fmt.Sprintf("%d", clouds), colors.Muted)
+	x += 4
+
+	// Rock bodies (solid shapes)
+	term.SetCharWithColor(x, statsY, '\u25C9', colors.MassHigh) // ◉
 	term.Print(x+1, statsY, fmt.Sprintf("%d", planets), colors.Muted)
+	x += 4
 
-	x += 5
-	term.SetCharWithColor(x, statsY, '\u00B7', colors.Muted)
+	term.SetCharWithColor(x, statsY, '\u2022', colors.MassLow) // •
 	term.Print(x+1, statsY, fmt.Sprintf("%d", asteroids), colors.Muted)
-
 	x += 5
-	term.SetCharWithColor(x, statsY, '\u00D7', colors.Danger)
+
+	term.SetCharWithColor(x, statsY, '\u00B7', colors.MassVeryLow) // ·
 	term.Print(x+1, statsY, fmt.Sprintf("%d", debris), colors.Muted)
 }
 

@@ -33,20 +33,17 @@ const (
 const (
 	StarMassMin     = 500.0
 	StarMassMax     = 2000.0
+	GiantMassMin    = 50.0
+	GiantMassMax    = 200.0
 	PlanetMassMin   = 5.0
-	PlanetMassMax   = 50.0
+	PlanetMassMax   = 45.0
 	AsteroidMassMin = 0.5
 	AsteroidMassMax = 3.0
-	DebrisMassMin   = 0.1
-	DebrisMassMax   = 0.5
 )
 
-// Mass kinds
+// Planet composition chances
 const (
-	KindStar     = "star"
-	KindPlanet   = "planet"
-	KindAsteroid = "asteroid"
-	KindDebris   = "debris"
+	GasGiantChance = 0.3 // 30% of planets are gas giants
 )
 
 // Event types
@@ -128,17 +125,17 @@ func (g *Generator) createStarSystem(t time.Time, systemIndex int) error {
 	starX := universeSize*0.15 + g.rng.Float64()*universeSize*0.7
 	starY := universeSize*0.15 + g.rng.Float64()*universeSize*0.7
 
-	// Create central star
+	// Create central star (gas composition, massive enough for fusion)
 	starMass := StarMassMin + g.rng.Float64()*(StarMassMax-StarMassMin)
 	star := &physics.Body{
-		ID:     g.nextMassID(),
-		Kind:   KindStar,
-		Name:   fmt.Sprintf("Sol-%d", systemIndex+1),
-		Mass:   starMass,
-		X:      starX,
-		Y:      starY,
-		Radius: 3.0 + g.rng.Float64()*2.0,
-		Alive:  true,
+		ID:          g.nextMassID(),
+		Name:        fmt.Sprintf("Sol-%d", systemIndex+1),
+		Composition: physics.CompGas,
+		Mass:        starMass,
+		X:           starX,
+		Y:           starY,
+		Radius:      3.0 + g.rng.Float64()*2.0,
+		Alive:       true,
 	}
 	g.sim.AddBody(star)
 	if err := g.writeBody(star, t); err != nil {
@@ -160,24 +157,45 @@ func (g *Generator) createStarSystem(t time.Time, systemIndex int) error {
 		vx := -orbitalSpeed * math.Sin(orbitAngle)
 		vy := orbitalSpeed * math.Cos(orbitAngle)
 
-		planetMass := PlanetMassMin + g.rng.Float64()*(PlanetMassMax-PlanetMassMin)
+		// Determine if gas giant or rocky planet
+		var composition string
+		var planetMass float64
+		var radius float64
+
+		if g.rng.Float64() < GasGiantChance {
+			// Gas giant
+			composition = physics.CompGas
+			planetMass = GiantMassMin + g.rng.Float64()*(GiantMassMax-GiantMassMin)
+			radius = 2.0 + g.rng.Float64()*1.0
+		} else {
+			// Rocky planet
+			composition = physics.CompRite
+			planetMass = PlanetMassMin + g.rng.Float64()*(PlanetMassMax-PlanetMassMin)
+			radius = 1.0 + g.rng.Float64()*1.5
+		}
+
 		planet := &physics.Body{
-			ID:     g.nextMassID(),
-			Kind:   KindPlanet,
-			Name:   fmt.Sprintf("%s-%c", star.Name, 'a'+rune(i)),
-			Mass:   planetMass,
-			X:      starX + orbitRadius*math.Cos(orbitAngle),
-			Y:      starY + orbitRadius*math.Sin(orbitAngle),
-			VX:     vx,
-			VY:     vy,
-			Radius: 1.0 + g.rng.Float64()*1.5,
-			Alive:  true,
+			ID:          g.nextMassID(),
+			Name:        fmt.Sprintf("%s-%c", star.Name, 'a'+rune(i)),
+			Composition: composition,
+			Mass:        planetMass,
+			X:           starX + orbitRadius*math.Cos(orbitAngle),
+			Y:           starY + orbitRadius*math.Sin(orbitAngle),
+			VX:          vx,
+			VY:          vy,
+			Radius:      radius,
+			Alive:       true,
 		}
 		g.sim.AddBody(planet)
 		if err := g.writeBody(planet, t); err != nil {
 			return err
 		}
-		if err := g.writeEvent(EventFormation, fmt.Sprintf("Planet %s formed", planet.Name), planet.ID, t); err != nil {
+
+		kindName := "Planet"
+		if planet.Kind() == physics.KindGiant {
+			kindName = "Gas giant"
+		}
+		if err := g.writeEvent(EventFormation, fmt.Sprintf("%s %s formed", kindName, planet.Name), planet.ID, t); err != nil {
 			return err
 		}
 	}
@@ -192,16 +210,16 @@ func (g *Generator) createAsteroid(t time.Time, reason string) error {
 
 	asteroidMass := AsteroidMassMin + g.rng.Float64()*(AsteroidMassMax-AsteroidMassMin)
 	asteroid := &physics.Body{
-		ID:     g.nextMassID(),
-		Kind:   KindAsteroid,
-		Name:   fmt.Sprintf("Ast-%03d", g.massID),
-		Mass:   asteroidMass,
-		X:      g.rng.Float64() * universeSize,
-		Y:      g.rng.Float64() * universeSize,
-		VX:     speed * math.Cos(angle),
-		VY:     speed * math.Sin(angle),
-		Radius: 0.5 + g.rng.Float64()*0.5,
-		Alive:  true,
+		ID:          g.nextMassID(),
+		Name:        fmt.Sprintf("Ast-%03d", g.massID),
+		Composition: physics.CompRite, // Asteroids are rocky
+		Mass:        asteroidMass,
+		X:           g.rng.Float64() * universeSize,
+		Y:           g.rng.Float64() * universeSize,
+		VX:          speed * math.Cos(angle),
+		VY:          speed * math.Sin(angle),
+		Radius:      0.5 + g.rng.Float64()*0.5,
+		Alive:       true,
 	}
 	g.sim.AddBody(asteroid)
 	if err := g.writeBody(asteroid, t); err != nil {
@@ -300,11 +318,25 @@ func (g *Generator) processCollisionEvent(event physics.CollisionEvent, t time.T
 			return err
 		}
 
-		// Assign IDs and write debris
-		for _, debris := range event.Debris {
-			debris.ID = g.nextMassID()
-			debris.Name = fmt.Sprintf("Debris-%03d", g.massID)
-			if err := g.writeBody(debris, t); err != nil {
+		// Assign IDs and names to collision products (name based on derived kind)
+		for _, piece := range event.Debris {
+			piece.ID = g.nextMassID()
+			// Name based on what the piece actually is
+			switch piece.Kind() {
+			case physics.KindStar:
+				piece.Name = fmt.Sprintf("Nova-%03d", g.massID)
+			case physics.KindGiant:
+				piece.Name = fmt.Sprintf("Giant-%03d", g.massID)
+			case physics.KindCloud:
+				piece.Name = fmt.Sprintf("Cloud-%03d", g.massID)
+			case physics.KindPlanet:
+				piece.Name = fmt.Sprintf("Planemo-%03d", g.massID) // Rogue planet
+			case physics.KindAsteroid:
+				piece.Name = fmt.Sprintf("Ast-%03d", g.massID)
+			default:
+				piece.Name = fmt.Sprintf("Debris-%03d", g.massID)
+			}
+			if err := g.writeBody(piece, t); err != nil {
 				return err
 			}
 		}
@@ -324,15 +356,16 @@ func (g *Generator) writeBody(b *physics.Body, t time.Time) error {
 		Type:      "mass",
 		Timestamp: t.UnixNano(),
 		Fields: map[string]entity.Value{
-			"kind":   entity.NewString(b.Kind),
-			"name":   entity.NewString(b.Name),
-			"mass":   entity.NewFloat(b.Mass),
-			"x":      entity.NewFloat(b.X),
-			"y":      entity.NewFloat(b.Y),
-			"vx":     entity.NewFloat(b.VX),
-			"vy":     entity.NewFloat(b.VY),
-			"radius": entity.NewFloat(b.Radius),
-			"alive":  entity.NewBool(b.Alive),
+			"kind":        entity.NewString(b.Kind()), // Derived from mass + composition
+			"composition": entity.NewString(b.Composition),
+			"name":        entity.NewString(b.Name),
+			"mass":        entity.NewFloat(b.Mass),
+			"x":           entity.NewFloat(b.X),
+			"y":           entity.NewFloat(b.Y),
+			"vx":          entity.NewFloat(b.VX),
+			"vy":          entity.NewFloat(b.VY),
+			"radius":      entity.NewFloat(b.Radius),
+			"alive":       entity.NewBool(b.Alive),
 		},
 	}
 	return g.store.Write(e)

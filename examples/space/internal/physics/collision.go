@@ -118,6 +118,9 @@ func (s *Simulation) handleAbsorption(larger, smaller *Body, px, py, cx, cy floa
 	// Destroy smaller body
 	smaller.Alive = false
 
+	// Merge compositions (gas dominates rock)
+	larger.Composition = MergeComposition(larger.Composition, smaller.Composition, larger.Mass, smaller.Mass)
+
 	// Larger body gains mass and inherits combined momentum
 	larger.Mass += smaller.Mass
 	larger.VX = px / larger.Mass
@@ -142,42 +145,46 @@ func (s *Simulation) handleDestruction(b1, b2 *Body, px, py, cx, cy float64) Col
 	b1.Alive = false
 	b2.Alive = false
 
-	// Create 2-4 debris pieces that share the momentum
-	numDebris := 2 + int(math.Min(float64(int((b1.Mass+b2.Mass)/5)), 2))
+	// Determine resulting composition (gas dominates)
+	resultComp := MergeComposition(b1.Composition, b2.Composition, b1.Mass, b2.Mass)
+
+	// Create 2-4 pieces that share the momentum
+	numPieces := 2 + int(math.Min(float64(int((b1.Mass+b2.Mass)/5)), 2))
 	totalMass := b1.Mass + b2.Mass
-	debrisMass := totalMass / float64(numDebris)
-	debrisRadius := math.Max(0.2, (b1.Radius+b2.Radius)*0.2)
+	pieceMass := totalMass / float64(numPieces)
+	pieceRadius := math.Max(0.2, (b1.Radius+b2.Radius)*0.2)
 
-	var debris []*Body
-	var debrisIDs []string
+	var pieces []*Body
+	var pieceIDs []string
 
-	// Distribute momentum among debris with some spread
-	for i := 0; i < numDebris; i++ {
+	// Distribute momentum among pieces with some spread
+	for i := 0; i < numPieces; i++ {
 		// Base velocity from momentum conservation
 		baseVX := px / totalMass
 		baseVY := py / totalMass
 
 		// Add some angular spread
-		angle := float64(i) * 2 * math.Pi / float64(numDebris)
+		angle := float64(i) * 2 * math.Pi / float64(numPieces)
 		spreadSpeed := math.Sqrt(baseVX*baseVX+baseVY*baseVY) * 0.3
 
 		d := &Body{
-			Kind:   "debris",
-			Mass:   debrisMass,
-			Radius: debrisRadius,
-			X:      cx + debrisRadius*2*math.Cos(angle),
-			Y:      cy + debrisRadius*2*math.Sin(angle),
-			VX:     baseVX + spreadSpeed*math.Cos(angle),
-			VY:     baseVY + spreadSpeed*math.Sin(angle),
-			Alive:  true,
+			Composition: resultComp,
+			Mass:        pieceMass,
+			Radius:      pieceRadius,
+			X:           cx + pieceRadius*2*math.Cos(angle),
+			Y:           cy + pieceRadius*2*math.Sin(angle),
+			VX:          baseVX + spreadSpeed*math.Cos(angle),
+			VY:          baseVY + spreadSpeed*math.Sin(angle),
+			Alive:       true,
 		}
-		debris = append(debris, d)
+		// Kind is derived from mass + composition automatically
+		pieces = append(pieces, d)
 		s.Bodies = append(s.Bodies, d)
 	}
 
 	// Collect IDs (they need to be assigned by the caller)
-	for _, d := range debris {
-		debrisIDs = append(debrisIDs, d.ID)
+	for _, d := range pieces {
+		pieceIDs = append(pieceIDs, d.ID)
 	}
 
 	return CollisionEvent{
@@ -186,7 +193,7 @@ func (s *Simulation) handleDestruction(b1, b2 *Body, px, py, cx, cy float64) Col
 		Body2ID:   b2.ID,
 		X:         cx,
 		Y:         cy,
-		DebrisIDs: debrisIDs,
-		Debris:    debris,
+		DebrisIDs: pieceIDs,
+		Debris:    pieces,
 	}
 }
