@@ -21,6 +21,7 @@ const (
 	MassFusion    = 500.0 // Minimum mass for hydrogen fusion (star)
 	MassSpherical = 15.0  // Minimum mass for self-gravity to create sphere
 	MassAsteroid  = 1.5   // Minimum mass for asteroid (vs debris)
+	MassCoalesce  = 3.0   // Below this, collisions coalesce rather than shatter
 )
 
 // Body represents a celestial body in the simulation

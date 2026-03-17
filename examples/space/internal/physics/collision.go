@@ -104,7 +104,11 @@ func (s *Simulation) resolveCollision(b1, b2 *Body) CollisionEvent {
 	px := b1.Mass*b1.VX + b2.Mass*b2.VX
 	py := b1.Mass*b1.VY + b2.Mass*b2.VY
 
-	if massRatio >= 3.0 {
+	// Small bodies coalesce rather than shatter, preventing chain reactions
+	// where fragments create more fragments indefinitely.
+	bothSmall := b1.Mass < MassCoalesce && b2.Mass < MassCoalesce
+
+	if massRatio >= 3.0 || bothSmall {
 		// Absorption: larger body absorbs smaller
 		return s.handleAbsorption(larger, smaller, px, py, cx, cy)
 	}
@@ -151,11 +155,24 @@ func (s *Simulation) handleDestruction(b1, b2 *Body, px, py, cx, cy float64) Col
 	// Create 2-4 pieces that share the momentum
 	numPieces := 2 + int(math.Min(float64(int((b1.Mass+b2.Mass)/5)), 2))
 	totalMass := b1.Mass + b2.Mass
-	pieceMass := totalMass / float64(numPieces)
+	avgPieceMass := totalMass / float64(numPieces)
 	pieceRadius := math.Max(0.2, (b1.Radius+b2.Radius)*0.2)
 
 	var pieces []*Body
 	var pieceIDs []string
+
+	// Distribute mass with variance so pieces have different sizes.
+	// This makes subsequent collisions more likely to result in absorption.
+	// Use a pattern where one piece gets more mass (helps absorption).
+	massVariance := make([]float64, numPieces)
+	remainingMass := totalMass
+	for i := 0; i < numPieces-1; i++ {
+		// First piece gets 40-60% of average, rest distributed among others
+		fraction := 0.4 + 0.4*float64(i)/float64(numPieces)
+		massVariance[i] = avgPieceMass * fraction
+		remainingMass -= massVariance[i]
+	}
+	massVariance[numPieces-1] = remainingMass // Last piece gets the rest (largest)
 
 	// Distribute momentum among pieces with some spread
 	for i := 0; i < numPieces; i++ {
@@ -167,10 +184,13 @@ func (s *Simulation) handleDestruction(b1, b2 *Body, px, py, cx, cy float64) Col
 		angle := float64(i) * 2 * math.Pi / float64(numPieces)
 		spreadSpeed := math.Sqrt(baseVX*baseVX+baseVY*baseVY) * 0.3
 
+		// Scale radius with mass
+		scaledRadius := pieceRadius * math.Sqrt(massVariance[i]/avgPieceMass)
+
 		d := &Body{
 			Composition: resultComp,
-			Mass:        pieceMass,
-			Radius:      pieceRadius,
+			Mass:        massVariance[i],
+			Radius:      scaledRadius,
 			X:           cx + pieceRadius*2*math.Cos(angle),
 			Y:           cy + pieceRadius*2*math.Sin(angle),
 			VX:          baseVX + spreadSpeed*math.Cos(angle),
