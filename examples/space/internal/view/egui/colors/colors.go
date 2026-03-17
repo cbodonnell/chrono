@@ -13,13 +13,13 @@ const (
 
 // Color palette
 var (
-	Primary   = color.RGBA{0x5f, 0x5f, 0xff, 0xff} // Blue
-	Success   = color.RGBA{0x00, 0xd7, 0x87, 0xff} // Green
-	Warning   = color.RGBA{0xff, 0xaf, 0x00, 0xff} // Orange
-	Danger    = color.RGBA{0xff, 0x00, 0x00, 0xff} // Red
-	Muted     = color.RGBA{0x58, 0x58, 0x58, 0xff} // Gray
-	White     = color.RGBA{0xff, 0xff, 0xff, 0xff} // White
-	Black     = color.RGBA{0x00, 0x00, 0x00, 0xff} // Black
+	Primary = color.RGBA{0x5f, 0x5f, 0xff, 0xff} // Blue
+	Success = color.RGBA{0x00, 0xd7, 0x87, 0xff} // Green
+	Warning = color.RGBA{0xff, 0xaf, 0x00, 0xff} // Orange
+	Danger  = color.RGBA{0xff, 0x00, 0x00, 0xff} // Red
+	Muted   = color.RGBA{0x58, 0x58, 0x58, 0xff} // Gray
+	White   = color.RGBA{0xff, 0xff, 0xff, 0xff} // White
+	Black   = color.RGBA{0x00, 0x00, 0x00, 0xff} // Black
 
 	// Space-specific colors
 	Yellow = color.RGBA{0xff, 0xd7, 0x00, 0xff} // Star color
@@ -32,6 +32,19 @@ var (
 	MassHigh     = color.RGBA{0xcc, 0xcc, 0x00, 0xff} // Yellow (small planets)
 	MassVeryHigh = color.RGBA{0xff, 0x99, 0x00, 0xff} // Orange (large planets)
 	MassExtreme  = color.RGBA{0xff, 0x44, 0x00, 0xff} // Red-orange (stars)
+
+	// Composition-based body colors (for pixel rendering)
+	// Gas bodies (warmer tones)
+	StarCore   = color.RGBA{0xff, 0xf4, 0xe0, 0xff} // Bright yellow-white
+	StarGlow   = color.RGBA{0xff, 0xaa, 0x44, 0x80} // Orange glow (semi-transparent)
+	GiantColor = color.RGBA{0xdd, 0x88, 0x44, 0xff} // Orange-brown
+	CloudColor = color.RGBA{0x88, 0xcc, 0xff, 0x99} // Blue-white, semi-transparent
+
+	// Rock bodies (cooler/earth tones)
+	PlanetBrown = color.RGBA{0x88, 0x66, 0x44, 0xff} // Brown
+	PlanetGray  = color.RGBA{0x77, 0x77, 0x88, 0xff} // Gray-blue
+	Asteroid    = color.RGBA{0x66, 0x66, 0x66, 0xff} // Gray
+	Debris      = color.RGBA{0x44, 0x44, 0x44, 0xff} // Dark gray
 
 	// Background
 	Background = color.RGBA{0x00, 0x00, 0x00, 0xff}
@@ -88,4 +101,46 @@ func interpolateGradient(t float64) color.RGBA {
 		B: uint8(float64(c1.B) + frac*(float64(c2.B)-float64(c1.B))),
 		A: 0xff,
 	}
+}
+
+// BodyColor returns the appropriate color for a body based on kind and mass.
+// Gas bodies use warmer tones, rock bodies use cooler/earth tones.
+func BodyColor(kind string, mass float64) color.RGBA {
+	switch kind {
+	case "star":
+		return StarCore
+	case "giant":
+		return GiantColor
+	case "cloud":
+		return CloudColor
+	case "planet":
+		// Vary planet color by mass
+		if mass > 30 {
+			return PlanetBrown
+		}
+		return PlanetGray
+	case "asteroid":
+		return Asteroid
+	case "debris":
+		return Debris
+	default:
+		return Muted
+	}
+}
+
+// Body size tuning constants
+const (
+	BodyRadiusMin      = 1.0 // Minimum radius in pixels
+	BodyRadiusLogScale = 4.0 // How fast radius grows with log10(mass)
+)
+
+// BodyRadius returns the pixel radius for a body based on mass using logarithmic scaling.
+// Formula: radius = min + log10(mass) * logScale (no upper cap)
+func BodyRadius(mass float64) float64 {
+	if mass <= 1 {
+		return BodyRadiusMin
+	}
+
+	radius := BodyRadiusMin + math.Log10(mass)*BodyRadiusLogScale
+	return radius
 }

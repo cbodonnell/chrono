@@ -18,7 +18,7 @@ const (
 	numPlanetsPerSystem     = 2
 	numAsteroids            = 7
 	asteroidFormationChance = 0.05 // 5% chance of new asteroid each tick
-	TickCount               = 600  // ticks (1 per minute)
+	TickCount               = 2400 // ticks (1 per minute)
 	TickDuration            = time.Minute
 )
 

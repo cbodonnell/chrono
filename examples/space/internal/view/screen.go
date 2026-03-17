@@ -48,7 +48,7 @@ type Screen struct {
 	// UI components
 	footer      *components.Footer
 	progressBar *components.ProgressBar
-	grid        *Grid
+	universe    *UniverseRenderer
 }
 
 // NewScreen creates a new viewer screen
@@ -66,7 +66,7 @@ func NewScreen(es *store.EntityStore) *Screen {
 		stepIndex:   0, // Default to 1 minute steps
 		footer:      components.NewFooter(0, renderer.Rows-1, renderer.Cols),
 		progressBar: components.NewProgressBar(3, renderer.Rows-4, renderer.Cols-6),
-		grid:        NewGrid(3, 3, 58, 19),
+		universe:    NewUniverseRenderer(3, 3, 58, 19),
 	}
 
 	s.footer.
@@ -204,13 +204,20 @@ func (s *Screen) refresh() {
 
 // Draw renders the screen to the terminal
 func (s *Screen) Draw(term *renderer.Terminal) {
+	// Clear composites from previous frame
+	term.ClearComposites()
+
 	// Draw outer box
 	term.DrawBoxWithTitle(0, 0, renderer.Cols, renderer.Rows, "/space", colors.Muted)
 
-	// Draw universe grid
-	s.grid.Draw(term, s.masses)
+	// Draw universe box border (characters)
+	s.universe.DrawBox(term)
 
-	// Draw legend below universe grid
+	// Render universe to canvas and register for compositing
+	s.universe.Draw(s.masses)
+	s.universe.Register(term)
+
+	// Draw legend below universe
 	s.drawLegend(term)
 
 	// Draw events panel
@@ -322,35 +329,37 @@ func (s *Screen) getEventAppearance(eventType string) (rune, color.RGBA) {
 }
 
 func (s *Screen) drawLegend(term *renderer.Terminal) {
-	// Draw legend below the universe grid (two rows for 6 kinds)
-	// All gray since actual colors are mass-based
-	legendY := s.grid.Y + s.grid.Height + 1
+	// Draw legend below the universe (two rows for 6 kinds)
+	// Using colored circles to match the new pixel rendering
+	ux, uy := s.universe.Position()
+	_, uh := s.universe.Size()
+	legendY := uy + uh + 1
 
-	// Row 1: Gas bodies (radiating shapes) - ★ Star  ✦ Giant  * Cloud
-	x := s.grid.X
-	term.SetCharWithColor(x, legendY, '\u2605', colors.Muted) // ★
+	// Row 1: Gas bodies - Star, Giant, Cloud
+	x := ux
+	term.SetCharWithColor(x, legendY, '\u25CF', colors.StarCore) // ● Star (filled circle)
 	term.Print(x+2, legendY, "Star", colors.Muted)
 
 	x += 7
-	term.SetCharWithColor(x, legendY, '\u2726', colors.Muted) // ✦
+	term.SetCharWithColor(x, legendY, '\u25CF', colors.GiantColor) // ● Giant
 	term.Print(x+2, legendY, "Giant", colors.Muted)
 
 	x += 8
-	term.SetCharWithColor(x, legendY, '*', colors.Muted) // *
+	term.SetCharWithColor(x, legendY, '\u25CF', colors.CloudColor) // ● Cloud
 	term.Print(x+2, legendY, "Cloud", colors.Muted)
 
-	// Row 2: Rock bodies (solid shapes) - ◉ Planet  • Asteroid  · Debris
+	// Row 2: Rock bodies - Planet, Asteroid, Debris
 	legendY++
-	x = s.grid.X
-	term.SetCharWithColor(x, legendY, '\u25C9', colors.Muted) // ◉
+	x = ux
+	term.SetCharWithColor(x, legendY, '\u25CF', colors.PlanetBrown) // ● Planet
 	term.Print(x+2, legendY, "Planet", colors.Muted)
 
 	x += 9
-	term.SetCharWithColor(x, legendY, '\u2022', colors.Muted) // •
+	term.SetCharWithColor(x, legendY, '\u25CF', colors.Asteroid) // ● Asteroid
 	term.Print(x+2, legendY, "Asteroid", colors.Muted)
 
 	x += 11
-	term.SetCharWithColor(x, legendY, '\u00B7', colors.Muted) // ·
+	term.SetCharWithColor(x, legendY, '\u25CF', colors.Debris) // ● Debris
 	term.Print(x+2, legendY, "Debris", colors.Muted)
 }
 

@@ -48,11 +48,18 @@ func WindowHeight() int {
 	return int(float64(ScreenHeight()) * Scale)
 }
 
+// CompositeImage represents an image to overlay after cell rendering
+type CompositeImage struct {
+	Image *ebiten.Image
+	X, Y  int // Screen pixel coordinates
+}
+
 // Terminal represents the terminal rendering surface
 type Terminal struct {
-	cells [][]Cell
-	face  text.Face
-	dirty bool
+	cells      [][]Cell
+	face       text.Face
+	dirty      bool
+	composites []*CompositeImage // Images to overlay after cell rendering
 }
 
 // NewTerminal creates a new terminal renderer
@@ -89,6 +96,20 @@ func (t *Terminal) Clear() {
 		}
 	}
 	t.dirty = true
+}
+
+// RegisterComposite queues an image to be drawn after cell rendering
+func (t *Terminal) RegisterComposite(img *ebiten.Image, x, y int) {
+	t.composites = append(t.composites, &CompositeImage{
+		Image: img,
+		X:     x,
+		Y:     y,
+	})
+}
+
+// ClearComposites clears the composite queue (call each frame)
+func (t *Terminal) ClearComposites() {
+	t.composites = t.composites[:0]
 }
 
 // SetCell sets a single cell at the given position
@@ -218,6 +239,13 @@ func (t *Terminal) Draw(screen *ebiten.Image) {
 				}
 			}
 		}
+	}
+
+	// Draw composited images (like the universe canvas) on top
+	for _, comp := range t.composites {
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(float64(comp.X), float64(comp.Y))
+		screen.DrawImage(comp.Image, op)
 	}
 
 	t.dirty = false
